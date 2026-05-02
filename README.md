@@ -42,67 +42,90 @@ Normal mode:
 
 ```text
 %CODEX_HOME%/pet-companion/
+```
 
-If CODEX_HOME is not set:
+If `CODEX_HOME` is not set:
 
+```text
 %USERPROFILE%/.codex/pet-companion/
+```
 
 This folder contains:
 
+```text
 config.json
 state.json
+```
 
 If you create this empty file next to the app:
 
+```text
 portable.flag
+```
 
-the app switches to portable mode and stores config.json and state.json next to itself.
+The app switches to portable mode and stores `config.json` and `state.json` next to itself.
 
-How to use
-Download CodexPetCompanion.exe from Releases.
-Run the app.
-Check the Codex folder in Settings.
-Choose a pet.
-Open mini mode from the button in the main window.
-Double-click the mini pet to return to the full window.
+## How to use
+
+1. Download `CodexPetCompanion.exe` from Releases.
+2. Run the app.
+3. Check the Codex folder in Settings.
+4. Choose a pet.
+5. Open mini mode from the button in the main window.
+6. Double-click the mini pet to return to the full window.
 
 If you are running from source, use:
 
+```text
 start_companion_qt.bat
-Custom pets
+```
+
+## Custom pets
 
 A pet pack must contain:
 
+```text
 pet.json
 spritesheet.webp
+```
 
 Spritesheet grid:
 
+```text
 1536x1872
 8 columns x 9 rows
 192x208 per frame
 transparent background
+```
 
 Custom pets use neutral text, so they will not receive Lumisprout or Vikamon-specific lines.
 
-App icon
+## App icon
 
 The release includes an icon:
 
+```text
 app_icon.ico
+```
 
-The build scripts use it automatically, so the generated .exe receives the icon.
+The build scripts use it automatically, so the generated `.exe` receives the icon.
 
-Build exe
+## Build exe
 
 On Windows, install dependencies and run:
 
+```text
 build_windows_exe.bat
+```
 
 The finished file will appear here:
 
+```text
 dist/CodexPetCompanion.exe
+```
 
 For a console/debug build, run:
 
+```text
 build_windows_exe_debug.bat
+```
