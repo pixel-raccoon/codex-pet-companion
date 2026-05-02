@@ -1,0 +1,11 @@
+{
+  "trait": "workaholic",
+  "notes": "Optional file format for custom pets. Put companion.json next to pet.json to set trait/personality.",
+  "supportedTraits": [
+    "neutral",
+    "nervous",
+    "lazy",
+    "glutton",
+    "workaholic"
+  ]
+}
