@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-APP_VERSION = "1.0.2-en"
+APP_VERSION = "1.0.3-en"
 CELL_W = 192
 CELL_H = 208
 ATLAS_SIZE = (1536, 1872)
