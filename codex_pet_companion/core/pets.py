@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from .config import DEFAULT_PET_JSON_PATH, DEFAULT_SPRITESHEET_PATH, ROOT
+from .config import DEFAULT_PET_JSON_PATH, DEFAULT_SPRITESHEET_PATH, ROOT, data_dir
 from .constants import ATLAS_SIZE, TRAITS
 
 @dataclass
@@ -53,26 +53,24 @@ def builtin_pets() -> list[PetInfo]:
         ))
     return pets
 
-def discover_pets(codex_home: Path | None) -> list[PetInfo]:
+def discover_pets(_codex_home: Path | None = None) -> list[PetInfo]:
     pets: list[PetInfo] = builtin_pets()
-
-    if codex_home is not None:
-        pets_root = codex_home / "pets"
-        if pets_root.is_dir():
-            for folder in sorted(p for p in pets_root.iterdir() if p.is_dir()):
-                manifest_path = folder / "pet.json"
-                if not manifest_path.is_file():
-                    continue
-                try:
-                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                except Exception:
-                    continue
-                pet_id = str(manifest.get("id") or folder.name).strip() or folder.name
-                display = str(manifest.get("displayName") or pet_id).strip() or pet_id
-                desc = str(manifest.get("description") or "").strip()
-                sheet = folder / str(manifest.get("spritesheetPath") or "spritesheet.webp")
-                if valid_spritesheet(sheet):
-                    pets.append(PetInfo(pet_id, display, desc, sheet, str(folder), folder))
+    pets_root = data_dir() / "pets"
+    if pets_root.is_dir():
+        for folder in sorted(p for p in pets_root.iterdir() if p.is_dir()):
+            manifest_path = folder / "pet.json"
+            if not manifest_path.is_file():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            pet_id = str(manifest.get("id") or folder.name).strip() or folder.name
+            display = str(manifest.get("displayName") or pet_id).strip() or pet_id
+            desc = str(manifest.get("description") or "").strip()
+            sheet = folder / str(manifest.get("spritesheetPath") or "spritesheet.webp")
+            if valid_spritesheet(sheet):
+                pets.append(PetInfo(pet_id, display, desc, sheet, str(folder), folder))
     return pets
 
 def load_companion_data(pet: PetInfo | None) -> dict:

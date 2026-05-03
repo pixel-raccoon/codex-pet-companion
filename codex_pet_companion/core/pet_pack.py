@@ -5,8 +5,8 @@ import shutil
 import zipfile
 from pathlib import Path
 
-def import_pet_pack(zip_path: Path, codex_home: Path) -> str:
-    pets_root = codex_home / "pets"
+def import_pet_pack(zip_path: Path, data_root: Path) -> str:
+    pets_root = data_root / "pets"
     pets_root.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "r") as archive:
         names = [name for name in archive.namelist() if not name.endswith("/")]

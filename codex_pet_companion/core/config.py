@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -32,14 +33,45 @@ def appdata_fallback_dir() -> Path:
         return Path(raw) / "CodexPetCompanion"
     return Path.home() / ".codex-pet-companion"
 
-def data_dir() -> Path:
-    base = app_base_dir()
-    if (base / PORTABLE_FLAG).exists():
-        return base
+def legacy_data_dir() -> Path | None:
     codex_home = default_codex_home()
-    if codex_home is not None:
-        return codex_home / APP_NAME
-    return appdata_fallback_dir()
+    if codex_home is None:
+        return None
+    return codex_home / APP_NAME
+
+
+def _copy_legacy_data_once(target: Path) -> None:
+    legacy = legacy_data_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    if legacy is None or not legacy.is_dir() or legacy.resolve() == target.resolve():
+        return
+    marker = target / ".legacy_migration_done"
+    if marker.exists() or any(target.iterdir()):
+        return
+    for item in legacy.iterdir():
+        destination = target / item.name
+        try:
+            if item.is_dir():
+                shutil.copytree(item, destination, dirs_exist_ok=True)
+            elif item.is_file():
+                shutil.copy2(item, destination)
+        except OSError:
+            continue
+    marker.write_text(str(legacy), encoding="utf-8")
+
+
+def data_dir() -> Path:
+    # Release builds keep all user data next to the application folder:
+    # Codex Pet Companion/
+    #   CodexPetCompanion.exe
+    #   updater.exe
+    #   data/
+    #     config.json
+    #     state.json
+    #     pets/
+    target = (app_base_dir() / "data").resolve()
+    _copy_legacy_data_once(target)
+    return target
 
 CONFIG_PATH = data_dir() / "config.json"
 
@@ -48,7 +80,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "stateDir": "auto",
     "miniAlwaysOnTop": True,
     "startMode": "full",
-    "fullScale": 2,
+    "fullScale": 1.00,
     "compactScale": 0.50,
     "compactCardMode": "always",
     "apiPort": 8787,
@@ -84,6 +116,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "enableTray": False,
     "singleInstance": True,
     "accentColor": "#a7f2c3",
+    "checkUpdatesOnStartup": True,
+    "lastUpdateCheck": 0,
+    "ignoredUpdateVersion": "",
 }
 
 def deep_merge(default: dict, loaded: dict) -> dict:
@@ -109,6 +144,14 @@ def load_config() -> dict[str, Any]:
         config["startMode"] = "full"
         save_config(config)
     config["enableTray"] = bool(config.get("enableTray", False))
+    # 1.0.6: full mode uses a smaller centered sprite presentation with stable padding.
+    try:
+        if float(config.get("fullScale", 1.00) or 1.00) >= 1.15:
+            config["fullScale"] = 1.00
+            save_config(config)
+    except (TypeError, ValueError):
+        config["fullScale"] = 1.00
+        save_config(config)
     return config
 
 def save_config(config: dict[str, Any]) -> None:

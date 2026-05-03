@@ -2,34 +2,41 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import subprocess
+import tempfile
+import threading
+import webbrowser
 from pathlib import Path
 from queue import Queue, Empty
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer, QPoint, QObject, QEvent
-from PySide6.QtGui import QAction, QColor, QCursor, QFont, QPainter, QPaintEvent, QPixmap, QRegion, QTextCursor
+from PySide6.QtCore import Qt, QTimer, QPoint, QObject, QEvent, QUrl
+from PySide6.QtGui import QAction, QColor, QCursor, QFont, QPainter, QPaintEvent, QPixmap, QRegion, QTextCursor, QDesktopServices
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QGridLayout, QMenu, QMessageBox, QPushButton, QTabWidget, QToolButton, QTextEdit, QVBoxLayout,
-    QWidget, QSystemTrayIcon, QGroupBox, QFormLayout, QScrollArea, QGraphicsDropShadowEffect
+    QMainWindow, QGridLayout, QMenu, QMessageBox, QPushButton, QSizePolicy, QTabWidget, QToolButton, QTextEdit, QVBoxLayout,
+    QWidget, QSystemTrayIcon, QGraphicsDropShadowEffect
 )
 from PySide6.QtGui import QIcon
 
 from codex_pet_companion.core.bridge import CodexBridge
 from codex_pet_companion.core.config import load_config, save_config, resolve_codex_home, resolve_state_dir, ui_default_config, data_dir
-from codex_pet_companion.core.constants import ACHIEVEMENTS, STATES, TRAITS
+from codex_pet_companion.core.constants import ACHIEVEMENTS, APP_VERSION, APP_NAME_DISPLAY, STATES, TRAITS
+from codex_pet_companion.core.daily_activities import ensure_activity_state as _ensure_activity_state, activity_text as _activity_text
 from codex_pet_companion.core.pet_pack import export_pet_pack, import_pet_pack
 from codex_pet_companion.core.pets import PetInfo, discover_pets, pet_trait_key
+from codex_pet_companion.core.phrases import hint_line
 from codex_pet_companion.core.state import add_log, clear_runtime_logs, history_lines, load_state, now, save_state
 from codex_pet_companion.core.tamagotchi import (
     apply_action, care_state, codex_session_lines, codex_status_line,
     codex_short_line, decayed, days_together, ensure_bond_state, friendship_progress_line,
     friendship_rank, friendship_title, maybe_mark_codex_silence,
     today_key,
-    hint_line
 )
+from codex_pet_companion.core.text_profiles import text_profile_id
+from codex_pet_companion.core.update_checker import UpdateInfo, check_for_update, download_update
 from .sprites import SpriteFrames
 from .widgets import StatRow
 
@@ -48,6 +55,11 @@ QWidget#CompactWindow {
 QLabel#PetSprite {
     background: transparent;
     border: none;
+}
+QFrame#SpriteCard {
+    background: rgba(12, 16, 22, 110);
+    border: 1px solid #202a33;
+    border-radius: 18px;
 }
 QFrame#Card {
     background: rgba(22, 26, 32, 238);
@@ -73,6 +85,11 @@ QLabel#Title {
     font-size: 22px;
     font-weight: 700;
 }
+QLabel#Relationship {
+    color: #d8eee1;
+    font-size: 14px;
+    font-weight: 700;
+}
 QLabel#Muted {
     color: #a9b5ad;
 }
@@ -82,6 +99,22 @@ QLabel#Accent {
 }
 QLabel#Codex {
     color: #f1d56e;
+}
+QLabel#StatusLine,
+QLabel#CodexLine,
+QLabel#StateLine {
+    padding-left: 6px;
+    padding-right: 6px;
+}
+QLabel#StatusLine {
+    color: #a7f2c3;
+    font-weight: 700;
+}
+QLabel#CodexLine {
+    color: #f1d56e;
+}
+QLabel#StateLine {
+    color: #a9b5ad;
 }
 QLabel#MiniName {
     color: #a7f2c3;
@@ -108,18 +141,24 @@ QLabel#MiniBarState {
     color: #dce8e1;
 }
 QPushButton {
-    background: #a7f2c3;
-    color: #101318;
-    border: 0;
+    background: #2bdc84;
+    color: #08170f;
+    border: 1px solid #64f4ae;
     border-radius: 10px;
-    padding: 8px 12px;
+    padding: 7px 12px;
     font-weight: 700;
 }
 QPushButton:hover {
-    background: #c9ffd9;
+    background: #64f4ae;
+    border: 1px solid #a8ffd0;
 }
 QPushButton#Secondary {
-    background: #d9e0df;
+    background: #151d25;
+    color: #d8eee1;
+    border: 1px solid #2a3843;
+    border-radius: 10px;
+    padding: 7px 12px;
+    font-weight: 700;
 }
 QPushButton#Danger {
     background: #ffa6a6;
@@ -187,23 +226,25 @@ QGroupBox::title {
 QCheckBox {
     padding: 4px;
 }
+
+QPushButton#AccentButton {
+    background: #1a2a22;
+    color: #a7f2c3;
+    border: 1px solid #31503f;
+    border-radius: 10px;
+    padding: 7px 12px;
+    font-weight: 700;
+}
+QPushButton#AccentButton:hover {
+    background: #21382d;
+    border: 1px solid #5fcf91;
+}
+QPushButton#Secondary:hover {
+    background: #1c2831;
+    border: 1px solid #40525d;
+}
 """
 
-
-class SettingsWheelFilter(QObject):
-    def __init__(self, scroll_area: QScrollArea):
-        super().__init__(scroll_area)
-        self.scroll_area = scroll_area
-
-    def eventFilter(self, watched, event):
-        if event.type() == QEvent.Type.Wheel:
-            delta = event.angleDelta().y()
-            if delta != 0:
-                bar = self.scroll_area.verticalScrollBar()
-                bar.setValue(bar.value() - delta)
-                event.accept()
-                return True
-        return False
 
 
 class SingleInstanceGuard:
@@ -230,6 +271,7 @@ class SingleInstanceGuard:
 
 
 
+
 class InfoCard(QFrame):
     def __init__(self, title: str, value: str = ""):
         super().__init__()
@@ -250,6 +292,7 @@ class InfoCard(QFrame):
 
     def set_value(self, value: str) -> None:
         self.value_label.setText(value)
+        self.value_label.setToolTip(value)
 
 
 class TextPanel(QFrame):
@@ -258,7 +301,7 @@ class TextPanel(QFrame):
         self.setObjectName("InfoCard")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
         title_label = QLabel(title)
         title_label.setObjectName("CardTitle")
@@ -369,6 +412,20 @@ class MiniSpriteWindow(QWidget):
 
     def mouseDoubleClickEvent(self, event):
         self.controller.show_full()
+
+
+class ClickableSpriteLabel(QLabel):
+    def __init__(self):
+        super().__init__()
+        self.clicked_callback = None
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.clicked_callback is not None:
+            self.clicked_callback()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
 
 class MiniBubbleWindow(QWidget):
@@ -550,8 +607,8 @@ class FullWindow(QMainWindow):
         super().__init__()
         self.controller = controller
         self.setWindowTitle("Codex Pet Companion")
-        self.resize(900, 800)
-        self.setMinimumSize(780, 700)
+        self.resize(900, 852)
+        self.setMinimumSize(780, 772)
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -560,40 +617,80 @@ class FullWindow(QMainWindow):
         layout.setSpacing(12)
 
         top = QHBoxLayout()
+        top.setSpacing(12)
 
-        self.pet = QLabel()
-        self.pet.setFixedSize(192 * 2, 208 * 2)
-        self.pet.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        top.addWidget(self.pet)
+        pet_column = QVBoxLayout()
+        pet_column.setSpacing(8)
 
-        side_card = QFrame()
-        side_card.setObjectName("Card")
-        side = QVBoxLayout(side_card)
-        side.setContentsMargins(16, 16, 16, 16)
+        pet_header = QGridLayout()
+        pet_header.setContentsMargins(0, 0, 0, 0)
+        pet_header.setHorizontalSpacing(8)
 
-        header = QHBoxLayout()
+        self.header_spacer = QWidget()
+        self.header_spacer.setFixedWidth(38)
+        pet_header.addWidget(self.header_spacer, 0, 0)
+
         self.title = QLabel("Pet")
         self.title.setObjectName("Title")
-        header.addWidget(self.title, 1)
+        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pet_header.addWidget(self.title, 0, 1)
 
         self.mini_button = QToolButton()
         self.mini_button.setText("🐾")
         self.mini_button.setToolTip("Mini mode")
         self.mini_button.clicked.connect(self.controller.show_compact)
+        self.mini_button.setFixedWidth(38)
+        pet_header.addWidget(self.mini_button, 0, 2, Qt.AlignmentFlag.AlignRight)
+        pet_header.setColumnStretch(1, 1)
+        pet_column.addLayout(pet_header)
 
-        header.addWidget(self.mini_button)
-        side.addLayout(header)
+        self.relationship = QLabel("")
+        self.relationship.setObjectName("Relationship")
+        self.relationship.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.relationship.setWordWrap(False)
+        pet_column.addWidget(self.relationship)
+
+        sprite_card = QFrame()
+        sprite_card.setObjectName("SpriteCard")
+        sprite_layout = QVBoxLayout(sprite_card)
+        sprite_layout.setContentsMargins(16, 12, 16, 14)
+        sprite_layout.setSpacing(0)
+
+        self.pet = ClickableSpriteLabel()
+        self.pet.setFixedSize(300, 320)
+        self.pet.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.pet.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.pet.setObjectName("PetSprite")
+        self.pet.setToolTip("Click to pet")
+        self.pet.clicked_callback = lambda: self.controller.do_action("pet")
+        sprite_layout.addWidget(self.pet, 0, Qt.AlignmentFlag.AlignCenter)
+
+        pet_buttons = QHBoxLayout()
+        pet_buttons.setSpacing(8)
+        for label, action in [("Feed", "feed"), ("Play", "play"), ("Rest", "rest")]:
+            button = QPushButton(label)
+            button.clicked.connect(lambda _=False, a=action: self.controller.do_action(a))
+            pet_buttons.addWidget(button)
+        pet_column.addWidget(sprite_card)
+        pet_column.addLayout(pet_buttons)
+        top.addLayout(pet_column)
+
+        side_card = QFrame()
+        side_card.setObjectName("Card")
+        side = QVBoxLayout(side_card)
+        side.setContentsMargins(14, 14, 14, 14)
+        side.setSpacing(8)
 
         self.status = QLabel("")
         self.status.setWordWrap(True)
-        self.status.setObjectName("Accent")
+        self.status.setObjectName("StatusLine")
 
         self.codex = QLabel("")
         self.codex.setWordWrap(True)
-        self.codex.setObjectName("Codex")
+        self.codex.setObjectName("CodexLine")
 
         self.state = QLabel("")
-        self.state.setObjectName("Muted")
+        self.state.setObjectName("StateLine")
 
         side.addWidget(self.status)
         side.addWidget(self.codex)
@@ -608,33 +705,15 @@ class FullWindow(QMainWindow):
         for row in self.stats.values():
             side.addWidget(row)
 
-        self.level = QLabel("")
-        self.level.setObjectName("Muted")
-        side.addWidget(self.level)
-
-        buttons = QHBoxLayout()
-        for label, action in [("Feed", "feed"), ("Pet", "pet"), ("Play", "play"), ("Rest", "rest")]:
-            b = QPushButton(label)
-            b.clicked.connect(lambda _=False, a=action: self.controller.do_action(a))
-            buttons.addWidget(b)
-        side.addLayout(buttons)
-
-        chat_row = QHBoxLayout()
-        self.chat_input = QLineEdit()
-        self.chat_input.setPlaceholderText("Talk to your pet...")
-        self.chat_input.returnPressed.connect(self.send_chat)
-        send = QPushButton("Talk")
-        send.setObjectName("Secondary")
-        send.clicked.connect(self.send_chat)
-        chat_row.addWidget(self.chat_input)
-        chat_row.addWidget(send)
-        side.addLayout(chat_row)
+        self.activity_card = InfoCard("Today's activity")
+        self.activity_card.setMinimumHeight(92)
+        side.addWidget(self.activity_card)
 
         top.addWidget(side_card, 1)
         layout.addLayout(top)
 
         self.tabs = QTabWidget()
-        self.tabs.setMinimumHeight(355)
+        self.tabs.setMinimumHeight(440)
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
@@ -646,16 +725,12 @@ class FullWindow(QMainWindow):
         self.build_codex_tab()
 
         self.settings = QWidget()
-        self.settings_scroll = QScrollArea()
-        self.settings_scroll.setWidgetResizable(True)
-        self.settings_scroll.setWidget(self.settings)
         self.build_settings()
-        self.install_settings_wheel_filter()
 
         self.tabs.addTab(self.log, "General")
         self.tabs.addTab(self.pet_tab, "Pet")
         self.tabs.addTab(self.codex_tab, "Codex")
-        self.tabs.addTab(self.settings_scroll, "Settings")
+        self.tabs.addTab(self.settings, "Settings")
 
         layout.addWidget(self.tabs, 1)
 
@@ -697,119 +772,129 @@ class FullWindow(QMainWindow):
 
     def build_settings(self):
         layout = QVBoxLayout(self.settings)
-        layout.setSpacing(12)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
-        window_box = QGroupBox("Window")
-        window_layout = QFormLayout(window_box)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 2)
+        grid.setColumnStretch(4, 0)
 
+        # Row 1: Startup [dropdown]        [x] Mini stays on top
+        grid.addWidget(QLabel("Startup:"), 0, 0)
         self.start_mode_combo = QComboBox()
-        self.start_mode_combo.addItem("Full mode", "full")
+        self.start_mode_combo.addItem("Full window", "full")
         self.start_mode_combo.addItem("Mini mode", "compact")
+        self.start_mode_combo.setMinimumWidth(170)
+        grid.addWidget(self.start_mode_combo, 0, 1)
 
         self.always_top_check = QCheckBox("Mini stays on top")
+        self.always_top_check.setToolTip("Keep the mini pet above other windows.")
+        grid.addWidget(self.always_top_check, 0, 2, 1, 3, Qt.AlignmentFlag.AlignLeft)
 
-        window_layout.addRow("Startup:", self.start_mode_combo)
-        window_layout.addRow("", self.always_top_check)
-        layout.addWidget(window_box)
-
-        mini_box = QGroupBox("Mini mode")
-        mini_layout = QFormLayout(mini_box)
-
-        self.compact_size_combo = QComboBox()
-        self.compact_size_combo.addItem("Small", 0.38)
-        self.compact_size_combo.addItem("Normal", 0.50)
-        self.compact_size_combo.addItem("Large", 0.65)
-
-        mini_layout.addRow("Pet size:", self.compact_size_combo)
-        layout.addWidget(mini_box)
-
-        pet_box = QGroupBox("Pet")
-        pet_layout = QFormLayout(pet_box)
-
-        self.pet_combo = QComboBox()
-        self.custom_name = QLineEdit()
-        self.custom_name.setPlaceholderText("Display name")
-
+        # Row 2: Care mode [dropdown wide]  Hint: ...
+        grid.addWidget(QLabel("Care mode:"), 1, 0)
         self.care_mode_combo = QComboBox()
         self.care_mode_combo.addItem("Soft", "soft")
         self.care_mode_combo.addItem("Normal", "normal")
         self.care_mode_combo.addItem("Strict", "strict")
+        self.care_mode_combo.setMinimumWidth(170)
+        grid.addWidget(self.care_mode_combo, 1, 1)
 
-        self.care_mode_hint = QLabel("Controls how quickly pet stats decay: soft is slower, strict is faster.")
+        self.care_mode_hint = QLabel("Soft is more relaxed. Strict needs attention more often.")
         self.care_mode_hint.setObjectName("Muted")
         self.care_mode_hint.setWordWrap(True)
+        grid.addWidget(self.care_mode_hint, 1, 2, 1, 3)
 
-        pet_layout.addRow("Choice:", self.pet_combo)
-        pet_layout.addRow("Name:", self.custom_name)
-        pet_layout.addRow("Care mode:", self.care_mode_combo)
-        pet_layout.addRow("", self.care_mode_hint)
-        layout.addWidget(pet_box)
+        # Row 3: Pet [dropdown]  Display name [input]
+        grid.addWidget(QLabel("Pet:"), 2, 0)
+        self.pet_combo = QComboBox()
+        self.pet_combo.setMinimumWidth(170)
+        grid.addWidget(self.pet_combo, 2, 1)
 
-        files_box = QGroupBox("Files")
-        files_layout = QVBoxLayout(files_box)
+        grid.addWidget(QLabel("Display name:"), 2, 2)
+        self.custom_name = QLineEdit()
+        self.custom_name.setPlaceholderText("Display name")
+        grid.addWidget(self.custom_name, 2, 3, 1, 2)
 
-        packs = QHBoxLayout()
-        imp = QPushButton("Adopt pet")
-        exp = QPushButton("Send as guest")
-        imp.setObjectName("Secondary")
-        exp.setObjectName("Secondary")
-        imp.clicked.connect(self.controller.import_pet_pack)
-        exp.clicked.connect(self.controller.export_pet_pack)
-        packs.addWidget(imp)
-        packs.addWidget(exp)
-        files_layout.addLayout(packs)
+        # Row 4: Mini size [dropdown]
+        grid.addWidget(QLabel("Mini size:"), 3, 0)
+        self.compact_size_combo = QComboBox()
+        self.compact_size_combo.addItem("Small", 0.38)
+        self.compact_size_combo.addItem("Normal", 0.50)
+        self.compact_size_combo.addItem("Large", 0.65)
+        self.compact_size_combo.setMinimumWidth(170)
+        grid.addWidget(self.compact_size_combo, 3, 1)
 
-        tools = QHBoxLayout()
-        choose_codex = QPushButton("Choose Codex folder")
+        # Row 5: Codex folder: [path/info] [Choose]
+        grid.addWidget(QLabel("Codex folder:"), 4, 0)
+        self.path_info_codex = QLabel("not found")
+        self.path_info_codex.setObjectName("Muted")
+        self.path_info_codex.setWordWrap(True)
+        grid.addWidget(self.path_info_codex, 4, 1, 1, 3)
+
+        choose_codex = QPushButton("Choose")
         choose_codex.setObjectName("Secondary")
+        choose_codex.setFixedWidth(86)
         choose_codex.clicked.connect(self.controller.choose_codex_home)
-        open_state = QPushButton("Open data folder")
-        open_state.setObjectName("Secondary")
-        open_state.clicked.connect(self.controller.open_state_dir)
-        tools.addWidget(choose_codex)
-        tools.addWidget(open_state)
-        files_layout.addLayout(tools)
+        grid.addWidget(choose_codex, 4, 4, Qt.AlignmentFlag.AlignRight)
 
-        self.path_info = QLabel("")
-        self.path_info.setObjectName("Muted")
-        self.path_info.setWordWrap(True)
-        files_layout.addWidget(self.path_info)
+        layout.addLayout(grid)
 
-        layout.addWidget(files_box)
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(6)
 
-        buttons = QHBoxLayout()
-        apply = QPushButton("Apply")
+        apply = QPushButton("Apply settings")
         apply.clicked.connect(self.controller.apply_settings_from_ui)
-        reset_ui = QPushButton("Reset settings")
+
+        reset_ui = QPushButton("Reset UI")
         reset_ui.setObjectName("Secondary")
         reset_ui.clicked.connect(self.controller.reset_ui_settings)
-        refresh = QPushButton("Refresh pets")
-        refresh.setObjectName("Secondary")
-        refresh.clicked.connect(self.controller.reload_pets)
+
         reset_state = QPushButton("Reset state")
         reset_state.setObjectName("Danger")
         reset_state.clicked.connect(self.controller.reset_state)
 
-        buttons.addWidget(apply)
-        buttons.addWidget(reset_ui)
-        buttons.addWidget(refresh)
-        buttons.addWidget(reset_state)
-        layout.addLayout(buttons)
+        buttons_row.addWidget(apply, 2)
+        buttons_row.addWidget(reset_ui, 1)
+        buttons_row.addWidget(reset_state, 1)
+        layout.addLayout(buttons_row)
 
+        file_buttons = QHBoxLayout()
+        file_buttons.setSpacing(6)
+        imp = QPushButton("Import / adopt pet")
+        imp.setObjectName("AccentButton")
+        exp = QPushButton("Export / share pet")
+        exp.setObjectName("AccentButton")
+        refresh = QPushButton("Refresh pets")
+        refresh.setObjectName("Secondary")
+        refresh.clicked.connect(self.controller.reload_pets)
+
+        for button in [imp, exp, refresh]:
+            file_buttons.addWidget(button)
+
+        imp.clicked.connect(self.controller.import_pet_pack)
+        exp.clicked.connect(self.controller.export_pet_pack)
+        layout.addLayout(file_buttons)
+
+        updates_row = QHBoxLayout()
+        updates_row.setSpacing(6)
+        updates_row.addWidget(QLabel("Updates:"))
+        self.check_updates = QPushButton("Check now")
+        self.check_updates.setObjectName("Secondary")
+        self.check_updates.clicked.connect(lambda: self.controller.check_updates(manual=True))
+        self.auto_update_check = QCheckBox("Check automatically")
+        updates_row.addWidget(self.check_updates)
+        updates_row.addWidget(self.auto_update_check)
+        updates_row.addStretch(1)
+        layout.addLayout(updates_row)
+
+        self.version_label = QLabel(f"Version {APP_VERSION}")
+        self.version_label.setObjectName("Muted")
+        layout.addWidget(self.version_label)
         layout.addStretch(1)
-
-    def install_settings_wheel_filter(self):
-        self.settings_wheel_filter = SettingsWheelFilter(self.settings_scroll)
-        self.settings.installEventFilter(self.settings_wheel_filter)
-        self.settings_scroll.viewport().installEventFilter(self.settings_wheel_filter)
-        for child in self.settings.findChildren(QWidget):
-            child.installEventFilter(self.settings_wheel_filter)
-
-    def send_chat(self):
-        text = self.chat_input.text().strip()
-        if text:
-            self.chat_input.clear()
-            self.controller.do_action("chat", text)
 
     def set_text_if_changed(self, box: QTextEdit, text: str) -> None:
         if box.toPlainText() == text:
@@ -835,6 +920,10 @@ class FullWindow(QMainWindow):
                 cursor.setPosition(min(anchor, max_pos), QTextCursor.MoveMode.KeepAnchor)
             box.setTextCursor(cursor)
 
+    def format_relationship_line(self, text: str) -> str:
+        # Give the relationship line a little more presence without changing the saved state text.
+        return str(text or "").replace("♡", "♡ ")
+
     def update_view(self, pixmap, data: dict[str, Any]):
         self.pet.setPixmap(pixmap)
         self.title.setText(data["pet_name"])
@@ -843,7 +932,9 @@ class FullWindow(QMainWindow):
         self.state.setText(data["state"])
         for key, row in self.stats.items():
             row.set_value(data[key])
-        self.level.setText(data["level"])
+        self.relationship.setText(self.format_relationship_line(data["level"]))
+        self.relationship.setToolTip(data["level"])
+        self.activity_card.set_value(data["activity"])
 
         self.set_text_if_changed(self.log, "\n".join(data["log"]))
         self.today_care_card.set_value(data["today_care"])
@@ -882,7 +973,8 @@ class CompanionController:
         self.current_pet = self.resolve_pet()
         ensure_bond_state(self.state, self.current_pet.id)
         self.trait_key = pet_trait_key(self.current_pet)
-        self.full_frames = SpriteFrames(self.current_pet.spritesheet_path, float(self.config.get("fullScale", 2)))
+        self.ensure_activity_state()
+        self.full_frames = SpriteFrames(self.current_pet.spritesheet_path, float(self.config.get("fullScale", 1.0)))
         self.compact_frames = SpriteFrames(self.current_pet.spritesheet_path, compact_scale_value(self.config.get("compactScale", 0.50)))
         self.frame_index = 0
         self.anim_name = "idle"
@@ -891,6 +983,9 @@ class CompanionController:
         self.compact_drag_animation = "running"
         self.queue: Queue = Queue()
         self._really_quitting = False
+        self._update_check_running = False
+        self._download_running = False
+        self._pending_update_info: UpdateInfo | None = None
         self.bridge = CodexBridge(self.codex_home, self.config, self.queue)
         self.bridge.start()
 
@@ -912,6 +1007,7 @@ class CompanionController:
         self.timer = QTimer()
         self.timer.timeout.connect(self.tick)
         self.timer.start(120)
+        QTimer.singleShot(1200, self.maybe_check_updates_on_startup)
 
     def start(self):
         mode = str(self.config.get("startMode") or "full").lower()
@@ -1090,6 +1186,12 @@ class CompanionController:
             if action == "__bridge_debug__":
                 self.add_bridge_debug(str(event.get("note") or ""))
                 continue
+            if action == "__update_check_result__":
+                self.handle_update_check_result(event)
+                continue
+            if action == "__update_download_result__":
+                self.handle_update_download_result(event)
+                continue
             action = action_map.get(action, action)
             self.add_bridge_debug(
                 f"queue received: {action} title={event.get('notification_title') or ''} subtitle={event.get('notification_subtitle') or ''}"
@@ -1192,6 +1294,11 @@ class CompanionController:
             return hint_line(pet_id, "no_rest_today")
         return hint_line(pet_id, "ok")
 
+    def ensure_activity_state(self) -> None:
+        _ensure_activity_state(self.state, self.current_pet.id, str(self.state.get("codex_status") or "idle"))
+
+    def activity_text(self) -> str:
+        return _activity_text(self.state, self.current_pet.id, self.pet_name())
 
     def view_data(self) -> dict[str, Any]:
         ensure_bond_state(self.state, self.current_pet.id)
@@ -1277,6 +1384,7 @@ class CompanionController:
             "pet_recent": pet_recent,
             "today_care": self.today_care_text(),
             "today_hint": self.today_hint_text(),
+            "activity": self.activity_text(),
             "hunger": round(float(self.state.get("hunger", 0) or 0)),
             "mood": round(float(self.state.get("mood", 0) or 0)),
             "energy": round(float(self.state.get("energy", 0) or 0)),
@@ -1295,6 +1403,7 @@ class CompanionController:
         self.process_queue()
         self.state = decayed(self.state, self.config, self.trait_key)
         maybe_mark_codex_silence(self.state, self.config)
+        self.ensure_activity_state()
 
         wanted = self.current_animation()
         self.force_animation(wanted)
@@ -1370,9 +1479,10 @@ class CompanionController:
         self.set_combo_value(self.full.compact_size_combo, compact_scale_value(self.config.get("compactScale", 0.50)))
 
         self.full.always_top_check.setChecked(bool(self.config.get("miniAlwaysOnTop", True)))
+        self.full.auto_update_check.setChecked(bool(self.config.get("checkUpdatesOnStartup", True)))
         self.set_combo_value(self.full.care_mode_combo, str(self.config.get("careMode") or "normal"))
 
-        self.full.path_info.setText(f"Codex: {self.codex_home or 'not found'}\nData: {self.state_dir}")
+        self.full.path_info_codex.setText(str(self.codex_home or "not found"))
 
     def apply_settings_from_ui(self):
         pet_id = self.full.pet_combo.currentData()
@@ -1383,6 +1493,7 @@ class CompanionController:
             self.config["startMode"] = "full"
         self.config["compactScale"] = compact_scale_value(self.full.compact_size_combo.currentData() or 0.50)
         self.config["miniAlwaysOnTop"] = bool(self.full.always_top_check.isChecked())
+        self.config["checkUpdatesOnStartup"] = bool(self.full.auto_update_check.isChecked())
         self.config["windowOpacity"] = 1.0
         self.config["careMode"] = self.full.care_mode_combo.currentData() or "normal"
         # Advanced values are intentionally kept out of the normal UI.
@@ -1402,7 +1513,8 @@ class CompanionController:
         self.pets = discover_pets(self.codex_home)
         self.current_pet = self.resolve_pet()
         self.trait_key = pet_trait_key(self.current_pet)
-        self.full_frames = SpriteFrames(self.current_pet.spritesheet_path, float(self.config.get("fullScale", 2)))
+        self.ensure_activity_state()
+        self.full_frames = SpriteFrames(self.current_pet.spritesheet_path, float(self.config.get("fullScale", 1.0)))
         self.compact_frames = SpriteFrames(self.current_pet.spritesheet_path, compact_scale_value(self.config.get("compactScale", 0.50)))
         self.reload_pet_combo()
         self.refresh()
@@ -1418,6 +1530,7 @@ class CompanionController:
         self.config["stateDir"] = state_dir
         self.config["enableTray"] = False
         self.config["closeToCompact"] = False
+        self.config["checkUpdatesOnStartup"] = bool(self.config.get("checkUpdatesOnStartup", True))
         save_config(self.config)
 
         self.full.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
@@ -1428,7 +1541,7 @@ class CompanionController:
         if self.compact.isVisible():
             self.compact.show()
 
-        self.full_frames = SpriteFrames(self.current_pet.spritesheet_path, float(self.config.get("fullScale", 2)))
+        self.full_frames = SpriteFrames(self.current_pet.spritesheet_path, float(self.config.get("fullScale", 1.0)))
         self.compact_frames = SpriteFrames(self.current_pet.spritesheet_path, compact_scale_value(self.config.get("compactScale", 0.50)))
         self.reload_pet_combo()
         self.refresh()
@@ -1437,7 +1550,8 @@ class CompanionController:
         self.pets = discover_pets(self.codex_home)
         self.current_pet = self.resolve_pet()
         self.trait_key = pet_trait_key(self.current_pet)
-        self.full_frames = SpriteFrames(self.current_pet.spritesheet_path, float(self.config.get("fullScale", 2)))
+        self.ensure_activity_state()
+        self.full_frames = SpriteFrames(self.current_pet.spritesheet_path, float(self.config.get("fullScale", 1.0)))
         self.compact_frames = SpriteFrames(self.current_pet.spritesheet_path, compact_scale_value(self.config.get("compactScale", 0.50)))
         self.reload_pet_combo()
         self.refresh()
@@ -1476,24 +1590,21 @@ class CompanionController:
             os.system(f'xdg-open "{self.state_dir}"')
 
     def import_pet_pack(self):
-        if self.codex_home is None:
-            QMessageBox.warning(self.full, "Adopt pet", "Choose a Codex folder first.")
-            return
-        path, _ = QFileDialog.getOpenFileName(self.full, "Adopt pet", "", "Zip (*.zip)")
+        path, _ = QFileDialog.getOpenFileName(self.full, "Import / adopt pet", "", "Zip (*.zip)")
         if not path:
             return
         try:
-            pet_id = import_pet_pack(Path(path), self.codex_home)
+            pet_id = import_pet_pack(Path(path), self.state_dir)
             self.config["selectedPetId"] = pet_id
             save_config(self.config)
             self.reload_pets()
         except Exception as exc:
-            QMessageBox.critical(self.full, "Adopt pet", str(exc))
+            QMessageBox.critical(self.full, "Import / adopt pet", str(exc))
 
     def export_pet_pack(self):
         pet = self.current_pet
         if pet.folder is None:
-            message = "Built-in pets already live here. Only custom pets can be sent as guest packs."
+            message = "Built-in pets already live here. Only custom pets can be exported as shareable packs."
             add_log(self.state, message)
             self.state["event_status"] = message
             self.state["current_event"] = "waving"
@@ -1501,16 +1612,208 @@ class CompanionController:
             save_state(self.state_path, self.state)
             self.refresh()
             return
-        path, _ = QFileDialog.getSaveFileName(self.full, "Send as guest", f"{pet.id}_guest_pack.zip", "Zip (*.zip)")
+        path, _ = QFileDialog.getSaveFileName(self.full, "Export / share pet", f"{pet.id}_pet_pack.zip", "Zip (*.zip)")
         if not path:
             return
         try:
             export_pet_pack(pet.folder, pet.id, Path(path))
-            add_log(self.state, f"Pet guest pack ready: {Path(path).name}")
+            add_log(self.state, f"Pet pack ready: {Path(path).name}")
             save_state(self.state_path, self.state)
             self.refresh()
         except Exception as exc:
-            QMessageBox.critical(self.full, "Send as guest", str(exc))
+            QMessageBox.critical(self.full, "Export / share pet", str(exc))
+
+    def maybe_check_updates_on_startup(self):
+        if not bool(self.config.get("checkUpdatesOnStartup", True)):
+            return
+        try:
+            last = float(self.config.get("lastUpdateCheck", 0) or 0)
+        except (TypeError, ValueError):
+            last = 0
+        if now() - last < 24 * 60 * 60:
+            return
+        self.check_updates(manual=False)
+
+    def check_updates(self, manual: bool = False):
+        if self._update_check_running:
+            if manual:
+                QMessageBox.information(self.full, "Updates", "Update check is already running.")
+            return
+        self._update_check_running = True
+        if manual:
+            self.full.check_updates.setEnabled(False)
+            self.full.check_updates.setText("Checking...")
+
+        def worker():
+            info = check_for_update(APP_VERSION)
+            self.queue.put({
+                "action": "__update_check_result__",
+                "manual": manual,
+                "info": info.to_dict(),
+            })
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def handle_update_check_result(self, event: dict[str, Any]):
+        self._update_check_running = False
+        if hasattr(self.full, "check_updates"):
+            self.full.check_updates.setEnabled(True)
+            self.full.check_updates.setText("Check now")
+
+        manual = bool(event.get("manual", False))
+        raw = event.get("info") if isinstance(event.get("info"), dict) else {}
+        info = UpdateInfo(**raw)
+        if info.ok:
+            self.config["lastUpdateCheck"] = now()
+            save_config(self.config)
+
+        if not info.ok:
+            if manual:
+                QMessageBox.warning(self.full, "Updates", f"Could not check for updates.\n\n{info.error}")
+            return
+
+        if not info.update_available:
+            if manual:
+                QMessageBox.information(self.full, "Updates", f"{APP_NAME_DISPLAY} is up to date.\n\nCurrent version: {APP_VERSION}")
+            return
+
+        ignored = str(self.config.get("ignoredUpdateVersion") or "")
+        if not manual and ignored and ignored == info.latest_version:
+            return
+        self.show_update_dialog(info)
+
+    def show_update_dialog(self, info: UpdateInfo):
+        self._pending_update_info = info
+        notes = (info.release_notes or "").strip()
+        if len(notes) > 900:
+            notes = notes[:900].rstrip() + "..."
+        if not notes:
+            notes = "No release notes provided."
+
+        asset_line = f"\n\nAsset: {info.asset_name}" if info.asset_name else "\n\nNo installable Windows asset was found."
+        message = (
+            f"Version {info.latest_version} is available.\n\n"
+            f"{notes}"
+            f"{asset_line}"
+        )
+        box = QMessageBox(self.full)
+        box.setWindowTitle("Update available")
+        box.setText(message)
+        install = box.addButton("Install update", QMessageBox.ButtonRole.AcceptRole)
+        later = box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        skip = box.addButton("Skip this version", QMessageBox.ButtonRole.DestructiveRole)
+        open_page = box.addButton("Open release page", QMessageBox.ButtonRole.ActionRole)
+        if not info.install_available:
+            install.setEnabled(False)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked == install:
+            self.install_update(info)
+        elif clicked == skip:
+            self.config["ignoredUpdateVersion"] = info.latest_version
+            save_config(self.config)
+        elif clicked == open_page:
+            if info.release_url:
+                QDesktopServices.openUrl(QUrl(info.release_url))
+        else:
+            _ = later
+
+    def install_update(self, info: UpdateInfo):
+        if self._download_running:
+            QMessageBox.information(self.full, "Updates", "An update download is already running.")
+            return
+        if not info.install_available:
+            if info.release_url:
+                QDesktopServices.openUrl(QUrl(info.release_url))
+            return
+        updater = self.updater_exe_path()
+        if not updater.exists():
+            QMessageBox.warning(
+                self.full,
+                "Updates",
+                f"updater.exe was not found next to the app.\n\nExpected:\n{updater}\n\nOpen the release page and download the update manually."
+            )
+            if info.release_url:
+                QDesktopServices.openUrl(QUrl(info.release_url))
+            return
+
+        self._download_running = True
+        if hasattr(self.full, "check_updates"):
+            self.full.check_updates.setEnabled(False)
+            self.full.check_updates.setText("Downloading...")
+
+        def worker():
+            try:
+                target_dir = Path(tempfile.mkdtemp(prefix="codex-pet-update-"))
+                package = download_update(info, target_dir)
+                self.queue.put({
+                    "action": "__update_download_result__",
+                    "ok": True,
+                    "package": str(package),
+                    "latest_version": info.latest_version,
+                })
+            except Exception as exc:  # noqa: BLE001
+                self.queue.put({
+                    "action": "__update_download_result__",
+                    "ok": False,
+                    "error": str(exc),
+                })
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def handle_update_download_result(self, event: dict[str, Any]):
+        self._download_running = False
+        if hasattr(self.full, "check_updates"):
+            self.full.check_updates.setEnabled(True)
+            self.full.check_updates.setText("Check now")
+
+        if not bool(event.get("ok", False)):
+            QMessageBox.warning(self.full, "Updates", f"Could not download update.\n\n{event.get('error') or 'Unknown error'}")
+            return
+
+        package = Path(str(event.get("package") or ""))
+        updater = self.updater_exe_path()
+        app_exe = self.app_exe_path()
+        if not package.is_file() or not updater.exists() or not app_exe.exists():
+            QMessageBox.warning(self.full, "Updates", "Downloaded update is not ready. Please try again.")
+            return
+
+        answer = QMessageBox.question(
+            self.full,
+            "Install update",
+            "The update has been downloaded. Install it now?\n\nThe app will close and restart.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            subprocess.Popen(
+                [
+                    str(updater),
+                    "--app-exe",
+                    str(app_exe),
+                    "--package",
+                    str(package),
+                    "--restart",
+                ],
+                cwd=str(app_exe.parent),
+                close_fds=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self.full, "Updates", f"Could not start updater.\n\n{exc}")
+            return
+
+        self.quit()
+
+    def app_exe_path(self) -> Path:
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).resolve()
+        return Path(sys.argv[0]).resolve()
+
+    def updater_exe_path(self) -> Path:
+        base = self.app_exe_path().parent
+        return base / ("updater.exe" if os.name == "nt" else "updater")
 
     def reset_state(self):
         if QMessageBox.question(self.full, "Reset", "Reset pet state?") != QMessageBox.StandardButton.Yes:

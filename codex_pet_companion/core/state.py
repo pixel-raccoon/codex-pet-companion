@@ -55,6 +55,9 @@ DEFAULT_STATE: dict[str, Any] = {
     "codex_session_file": "",
     "codex_counters": {"task_started": 0, "function_call": 0, "error": 0, "final_answer": 0, "events": 0},
     "codex_silence_notified": False,
+    "daily_activity": {},
+    "idle_activity": {},
+    "idle_activity_next_at": 0,
 }
 
 def load_state(path: Path) -> dict[str, Any]:
@@ -82,6 +85,10 @@ def load_state(path: Path) -> dict[str, Any]:
         state["daily_care"] = {}
     if not isinstance(state.get("cooldowns"), dict):
         state["cooldowns"] = {}
+    if not isinstance(state.get("daily_activity"), dict):
+        state["daily_activity"] = {}
+    if not isinstance(state.get("idle_activity"), dict):
+        state["idle_activity"] = {}
     if not isinstance(state.get("bond_milestones"), list):
         state["bond_milestones"] = []
     try:

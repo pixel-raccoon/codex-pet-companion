@@ -4,7 +4,15 @@ import time
 from typing import Any
 
 from .constants import ACHIEVEMENTS, EVENT_TO_ANIMATION, TRAITS
-from .phrases import chat_response, phrase
+from .phrases import (
+    care_line,
+    chat_response,
+    get_friendship_titles,
+    get_milestones,
+    get_special_day_line,
+    hint_line,
+    phrase,
+)
 from .text_profiles import text_profile_id
 from .state import add_codex_log, add_log, clamp, now, unlock
 
@@ -12,90 +20,9 @@ def level_value(state: dict[str, Any]) -> int:
     return max(1, int(state.get("level", 1) or 1))
 
 FRIENDSHIP_THRESHOLDS = [0, 20, 50, 90, 140, 200, 270, 350, 440, 540, 650]
-FRIENDSHIP_TITLES = [
-    "First meeting",
-    "Getting used to you",
-    "Recognizes you",
-    "Trusting",
-    "Warming up",
-    "One of yours",
-    "Loyal companion",
-    "Attached",
-    "Almost family",
-    "Best companion",
-    "Beloved little problem",
-]
-LUMISPROUT_TITLES = [
-    "Seed of doubt",
-    "Took root",
-    "Knows the scent",
-    "Reaching for light",
-    "Rustling nearby",
-    "Blooming closer",
-    "House sprout",
-    "Mossy accomplice",
-    "Almost a forest",
-    "Loyal forest companion",
-    "Domestic forest menace",
-]
-VIKAMON_TITLES = [
-    "Familiar troublemaker",
-    "Hood is watching",
-    "Tolerates you nearby",
-    "Allows care",
-    "Monster-hood alliance",
-    "Your own little menace",
-    "Hoodie companion",
-    "Personal green chaos",
-    "Almost domestic threat",
-    "Best troublemaker",
-    "Beloved monster-hood problem",
-]
+# Friendship titles are now stored in phrases/; use get_friendship_titles(pet_id)
 
-FRIENDSHIP_TITLES_BY_PROFILE = {
-    "neutral": FRIENDSHIP_TITLES,
-    "lumisprout": LUMISPROUT_TITLES,
-    "vikamon": VIKAMON_TITLES,
-}
-
-MILESTONES_BY_PROFILE = {
-    "neutral": {
-        7: "One week together. The pet already recognizes this place.",
-        30: "One month together. The pet thinks this is almost home.",
-        100: "One hundred days together. This has become a sturdy little ritual.",
-        365: "One year together. The pet has become a real companion.",
-    },
-    "lumisprout": {
-        7: "One week together. Lumisprout has rooted into the desk.",
-        30: "One month together. This spot can officially be labeled forest.",
-        100: "One hundred days together. Lumisprout considers this a stable ecosystem.",
-        365: "One year together. Lumisprout is officially a domestic forest phenomenon.",
-    },
-    "vikamon": {
-        7: "One week together. Vikamon already considers this desk her territory.",
-        30: "One month together. Vikamon has officially moved her hood into the workflow.",
-        100: "One hundred days together. The monster slippers have accepted you.",
-        365: "One year together. Vikamon is now a full-time domestic troublemaker.",
-    },
-}
-
-SPECIAL_DAY_LINES_BY_PROFILE = {
-    "neutral": {
-        "holiday_new_year": "New Year together. The pet celebrates it next to the desk.",
-        "holiday_halloween": "Halloween together. The pet looks a little more mysterious than usual.",
-        "holiday_first_launch_anniversary": "First launch anniversary. The pet remembers how it all started.",
-    },
-    "lumisprout": {
-        "holiday_new_year": "New Year together. Lumisprout rustles like a tiny tree.",
-        "holiday_halloween": "Halloween together. Lumisprout pretends to be a scary forest.",
-        "holiday_first_launch_anniversary": "First launch anniversary. Lumisprout grew a commemorative root.",
-    },
-    "vikamon": {
-        "holiday_new_year": "New Year together. Vikamon says the hood approves this holiday.",
-        "holiday_halloween": "Halloween together. Vikamon is already in a monster hoodie, so she considers herself ready.",
-        "holiday_first_launch_anniversary": "First launch anniversary. Vikamon acts like this was her plan all along.",
-    },
-}
+# Milestones and special day lines are now stored in phrases/; use get_milestones() / get_special_day_line()
 
 MILESTONE_ACHIEVEMENTS = {
     7: "milestone_7_days",
@@ -128,8 +55,7 @@ def mark_special_once(state: dict[str, Any], key: str, message: str, achievement
         unlock(state, achievement_id)
 
 def special_day_message(event_id: str, pet_id: str) -> str:
-    bank = SPECIAL_DAY_LINES_BY_PROFILE.get(text_profile_id(pet_id), SPECIAL_DAY_LINES_BY_PROFILE["neutral"])
-    return bank.get(event_id) or SPECIAL_DAY_LINES_BY_PROFILE["neutral"].get(event_id) or ""
+    return get_special_day_line(event_id, pet_id)
 
 def check_special_days(state: dict[str, Any], pet_id: str) -> None:
     today = today_key()
@@ -187,8 +113,8 @@ def days_together(state: dict[str, Any]) -> int:
     return 1
 
 def milestone_message(days: int, pet_id: str) -> str:
-    special = MILESTONES_BY_PROFILE.get(text_profile_id(pet_id), MILESTONES_BY_PROFILE["neutral"])
-    return special.get(days, f"Day together: {days}.")
+    milestones = get_milestones(pet_id)
+    return milestones.get(days, f"Day together: {days}.")
 
 def friendship_rank(state: dict[str, Any]) -> int:
     points = float(state.get("friendship_points", 0.0) or 0.0)
@@ -200,7 +126,7 @@ def friendship_rank(state: dict[str, Any]) -> int:
 
 def friendship_title(state: dict[str, Any], pet_id: str) -> str:
     rank = friendship_rank(state)
-    titles = FRIENDSHIP_TITLES_BY_PROFILE.get(text_profile_id(pet_id), FRIENDSHIP_TITLES)
+    titles = get_friendship_titles(pet_id)
     return titles[min(rank, len(titles) - 1)]
 
 def friendship_hearts(state: dict[str, Any]) -> str:
@@ -623,117 +549,7 @@ def refresh_codex_status(state: dict[str, Any]) -> None:
         state["codex_notification_subtitle"] = ""
 
 
-CARE_LINES_BY_PROFILE = {
-    "lumisprout": {
-        "feed_hungry": "{pet} eats like a tiny forest disaster.",
-        "feed": "{pet} rustles its leaves and accepts the food.",
-        "feed_full": "{pet} is already full and looks at the food like extra fertilizer.",
-        "feed_cooldown": "{pet} is still digesting. Wait {minutes}.",
-        "pet_cooldown": "{pet} has already been polished. {minutes} more and irritation begins.",
-        "pet_spam": "{pet} has already been polished. More will only add shine and irritation.",
-        "pet": "{pet} rustles quietly and pretends this is accidentally pleasant.",
-        "play_tired": "{pet} wants to play, but is lying down like a wet leaf.",
-        "play_resting": "{pet} is resting. Do not shake the tiny forest.",
-        "play_cooldown": "{pet} is still recovering from the previous chaos. Wait {minutes}.",
-        "play": "{pet} caused a tiny green chaos.",
-        "rest_cooldown": "{pet} just rested. {minutes} more before another dramatic reboot.",
-        "rest_already": "{pet} is already resting. Do not shake the tiny forest.",
-        "rest": "{pet} put down roots and is resting.",
-        "rest_interrupt": "{pet} reluctantly returns to the desk.",
-        "rest_stop": "{pet} reluctantly returns to the desk.",
-    },
-    "vikamon": {
-        "feed_hungry": "{pet} pounces on the food and pretends everything was under control.",
-        "feed": "{pet} accepts food as rightful tribute.",
-        "feed_full": "{pet} is already full and looks like you tried to bribe her with a cheap trick.",
-        "feed_cooldown": "{pet} is still chewing with a winner's face. Wait {minutes}.",
-        "pet_cooldown": "{pet} just allowed care. {minutes} more and she starts biting with her eyes.",
-        "pet_spam": "{pet} huffs: the hood has already been patted. Hands off.",
-        "pet": "{pet} huffs but stays nearby. That is almost affection.",
-        "play_tired": "{pet} would run around, but the monster slippers demand a pause.",
-        "play_resting": "{pet} is resting in the hood. Do not shake the green menace.",
-        "play_cooldown": "{pet} is still enjoying the previous chaos. Wait {minutes}.",
-        "play": "{pet} launches a tiny trouble sprint.",
-        "rest_cooldown": "{pet} rested recently and now acts like she can do anything again. Wait {minutes}.",
-        "rest_already": "{pet} is already resting in the hood. Do not negotiate with the green menace.",
-        "rest": "{pet} disappears into the hood and is temporarily unavailable.",
-        "rest_interrupt": "{pet} reluctantly crawls out of the hood and pretends it was her idea.",
-        "rest_stop": "{pet} reluctantly crawls out of the hood and pretends it was her idea.",
-    },
-    "neutral": {
-        "feed_hungry": "{pet} eats like it has been waiting for this decision.",
-        "feed": "{pet} eats and calms down a little.",
-        "feed_full": "{pet} is already full.",
-        "feed_cooldown": "{pet} is still digesting. Wait {minutes}.",
-        "pet_cooldown": "{pet} does not want another petting yet. Wait {minutes}.",
-        "pet_spam": "{pet} is tired of too much care.",
-        "pet": "{pet} accepts the care.",
-        "play_tired": "{pet} is too tired to play.",
-        "play_resting": "{pet} is resting.",
-        "play_cooldown": "{pet} is still resting after playtime. Wait {minutes}.",
-        "play": "{pet} plays a little.",
-        "rest_cooldown": "{pet} rested recently. Wait {minutes}.",
-        "rest_already": "{pet} is already resting.",
-        "rest": "{pet} is resting.",
-        "rest_interrupt": "{pet} reluctantly returns to the desk.",
-        "rest_stop": "{pet} returns to the desk.",
-    },
-}
-
-HINT_LINES_BY_PROFILE = {
-    "lumisprout": {
-        "recovery_hunger": "Needs food. Friendship growth is paused.",
-        "recovery_energy": "Needs rest. Do not shake the poor sprout.",
-        "recovery_mood": "Needs care. Pet it or give it a quiet day.",
-        "recovery_focus": "Focus scattered. Rest and calm work will help.",
-        "low_hunger": "It may need food soon.",
-        "low_energy": "Better let it rest.",
-        "low_mood": "Mood is low. Pet it or play later.",
-        "low_focus": "Focus scattered. Rest and work rhythm will help.",
-        "not_fed_today": "Not fed today yet.",
-        "no_rest_today": "No rest today yet.",
-        "ok": "Everything is fine. No heroics.",
-    },
-    "vikamon": {
-        "recovery_hunger": "Vikamon needs food. Friendship growth is paused.",
-        "recovery_energy": "Vikamon needs rest. The hood asks for silence.",
-        "recovery_mood": "Vikamon is sulking. Pet her or give her a quiet day.",
-        "recovery_focus": "Focus scattered. Rest and calm work will help.",
-        "low_hunger": "Vikamon will soon demand snack tribute.",
-        "low_energy": "Vikamon needs a pause.",
-        "low_mood": "Vikamon is clearly sulking. Pet her or play later.",
-        "low_focus": "Focus scattered. Rest and work rhythm will help.",
-        "not_fed_today": "Not fed today yet.",
-        "no_rest_today": "No rest today yet.",
-        "ok": "Everything is fine. No heroics.",
-    },
-    "neutral": {
-        "recovery_hunger": "Needs food. Friendship growth is paused.",
-        "recovery_energy": "Needs rest. Friendship growth is paused.",
-        "recovery_mood": "Needs care. Pet it or give it a quiet day.",
-        "recovery_focus": "Focus scattered. Rest and calm work will help.",
-        "low_hunger": "It may need food soon.",
-        "low_energy": "Better let it rest.",
-        "low_mood": "Mood is low. Pet it or play later.",
-        "low_focus": "Focus scattered. Rest and work rhythm will help.",
-        "not_fed_today": "Not fed today yet.",
-        "no_rest_today": "No rest today yet.",
-        "ok": "Everything is fine. No heroics.",
-    },
-}
-
-
-def profile_bank(table: dict[str, dict[str, str]], pet_id: str) -> dict[str, str]:
-    return table.get(text_profile_id(pet_id), table["neutral"])
-
-def care_line(pet_id: str, pet_name: str, key: str, *, minutes: str = "") -> str:
-    bank = profile_bank(CARE_LINES_BY_PROFILE, pet_id)
-    template = bank.get(key) or CARE_LINES_BY_PROFILE["neutral"].get(key) or "{pet} reacts."
-    return template.format(pet=pet_name, minutes=minutes)
-
-def hint_line(pet_id: str, key: str) -> str:
-    bank = profile_bank(HINT_LINES_BY_PROFILE, pet_id)
-    return bank.get(key) or HINT_LINES_BY_PROFILE["neutral"].get(key) or HINT_LINES_BY_PROFILE["neutral"]["ok"]
+# care_line() and hint_line() are imported from .phrases above.
 
 def apply_action(
     state: dict[str, Any],

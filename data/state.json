@@ -1,0 +1,137 @@
+{
+  "version": "11",
+  "hunger": 91.12481723388075,
+  "mood": 100.0,
+  "energy": 37.20522803754155,
+  "focus": 99.98768145958587,
+  "xp": 0,
+  "level": 1,
+  "friendship_points": 24.800000000000004,
+  "friendship_rank": 1,
+  "first_seen_date": "2026-05-02",
+  "last_seen_date": "2026-05-03",
+  "seen_days": [
+    "2026-05-02",
+    "2026-05-03"
+  ],
+  "daily_bond": {
+    "2026-05-02": {
+      "codex_running": 2,
+      "review": 1,
+      "feed": 1,
+      "pet": 3,
+      "play": 1,
+      "rest": 1,
+      "chat": 1
+    },
+    "2026-05-03": {
+      "feed": 2,
+      "pet": 3,
+      "play": 1,
+      "rest": 1,
+      "codex_running": 4,
+      "review": 3,
+      "chat": 1
+    }
+  },
+  "bond_milestones": [],
+  "daily_care": {
+    "2026-05-02": {
+      "feed": 1.0,
+      "pet": 3.0,
+      "play": 3.0,
+      "rest": 1.0,
+      "codex_tasks": 2.0,
+      "codex_tools": 0,
+      "codex_reviews": 1.0,
+      "codex_errors": 0,
+      "focused_seconds": 12.113914012908936,
+      "good_care": true,
+      "closed": true
+    },
+    "2026-05-03": {
+      "feed": 2.0,
+      "pet": 10.0,
+      "play": 6.0,
+      "rest": 11.0,
+      "codex_tasks": 4.0,
+      "codex_tools": 0,
+      "codex_reviews": 4.0,
+      "codex_errors": 0,
+      "focused_seconds": 4.114820718765259
+    }
+  },
+  "current_day": "2026-05-03",
+  "rest_until": 0.0,
+  "cooldowns": {
+    "feed": 1777810197.3317106,
+    "pet": 1777813270.214981,
+    "play": 1777813754.143245,
+    "rest": 1777814831.7351785
+  },
+  "last_care_denial": "pet",
+  "last_care_denial_until": 1777813060.2149894,
+  "last_update": 1777813114.4964404,
+  "current_event": "jumping",
+  "event_until": 1777813036.1432495,
+  "event_status": "Lumisprout caused a tiny green chaos.",
+  "emotion": "curious",
+  "emotion_until": 1777813079.143259,
+  "log": [
+    "Pet started."
+  ],
+  "codex_log": [],
+  "history": [],
+  "achievements": [
+    "bridge_first_event",
+    "first_review",
+    "first_feed",
+    "well_fed",
+    "codex_sprinter",
+    "review_streak_3",
+    "play_5"
+  ],
+  "counters": {
+    "feed": 3,
+    "play": 9,
+    "chat": 2
+  },
+  "error_streak": 0,
+  "review_streak": 5,
+  "busy_streak": 0,
+  "codex_status": "idle",
+  "codex_last_event": "",
+  "codex_last_note": "",
+  "codex_last_time": 0,
+  "codex_session_file": "C:\\Users\\22233\\.codex\\sessions\\2026\\05\\03\\rollout-2026-05-03T08-29-06-019dec4f-cd1b-72a2-89c4-5a5bcfd53595.jsonl",
+  "codex_counters": {
+    "task_started": 0,
+    "function_call": 0,
+    "error": 0,
+    "final_answer": 0,
+    "events": 0
+  },
+  "codex_silence_notified": false,
+  "daily_activity": {
+    "date": "2026-05-03",
+    "pet_id": "lumisprout",
+    "kind": "daily",
+    "text": "A quiet minute turned into a tiny forest ceremony."
+  },
+  "idle_activity": {
+    "date": "2026-05-03",
+    "count": 0,
+    "text": "",
+    "until": 0.0
+  },
+  "idle_activity_next_at": 1777814827.5133505,
+  "codex_status_until": 0,
+  "codex_notification": "",
+  "codex_notification_title": "",
+  "codex_notification_subtitle": "",
+  "codex_notification_until": 0,
+  "recovery_flags": {},
+  "critical_growth_blocked": false,
+  "codex_session_active": false,
+  "codex_current_task_title": "test"
+}

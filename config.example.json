@@ -30,7 +30,7 @@
     "error": 3
   },
   "startMode": "full",
-  "fullScale": 2,
+  "fullScale": 1.0,
   "compactScale": 0.5,
   "closeToCompact": false,
   "compactCardMode": "always",
@@ -53,5 +53,8 @@
   "codexNotificationSeconds": 5.0,
   "offlineDecayCapSeconds": 28800,
   "criticalRecoveryFloor": 12,
-  "criticalEventCooldownSeconds": 21600
+  "criticalEventCooldownSeconds": 21600,
+  "checkUpdatesOnStartup": true,
+  "lastUpdateCheck": 0,
+  "ignoredUpdateVersion": ""
 }
