@@ -2,7 +2,15 @@
 
 A tiny tamagotchi-style desktop companion for Codex.
 
-![Codex Pet Companion screenshot](screenshot.png)
+## Screenshots
+
+**Full mode**
+
+![Codex Pet Companion full mode](screenshot.png)
+
+**Mini mode**
+
+![Codex Pet Companion mini mode](screenshot2.png)
 
 ## Download
 
