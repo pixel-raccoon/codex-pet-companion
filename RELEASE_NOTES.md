@@ -1,4 +1,4 @@
-# Codex Pet Companion 1.0.2-en
+# Codex Pet Companion 1.0.3-en
 
 English release package.
 
@@ -33,3 +33,12 @@ Portable mode:
 ```text
 portable.flag next to the exe
 ```
+
+
+## 1.0.3-en
+
+- Rebalanced rest and energy.
+- Offline time now behaves like sleep: energy no longer drains while the app is closed.
+- Rest gives an immediate low-energy boost and restores energy much faster.
+- Pressing Rest again no longer cancels rest; it says the pet is already resting.
+- Feed, pet, play, chat, or Codex work can interrupt rest with a separate log message.
