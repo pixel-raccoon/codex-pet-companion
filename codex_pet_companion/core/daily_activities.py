@@ -53,12 +53,21 @@ def _stat_value(state: dict[str, Any], key: str, default: float = 0.0) -> float:
 def _micro_reaction_text(state: dict[str, Any], pet_id: str, current_time: float) -> str:
     """Return a short stat-based reaction when the pet needs attention."""
     bank = get_micro_reactions(pet_id)
+    hunger = _stat_value(state, "hunger", 100.0)
+    mood = _stat_value(state, "mood", 100.0)
+    energy = _stat_value(state, "energy", 100.0)
+    focus = _stat_value(state, "focus", 100.0)
+
     checks = [
-        ("low_energy", _stat_value(state, "energy", 100.0) < 22),
-        ("low_hunger", _stat_value(state, "hunger", 100.0) < 24),
-        ("low_mood", _stat_value(state, "mood", 100.0) < 28),
-        ("low_focus", _stat_value(state, "focus", 100.0) < 18),
-        ("high_focus", _stat_value(state, "focus", 0.0) > 84 and _stat_value(state, "energy", 100.0) > 35),
+        ("low_energy", energy < 22),
+        ("low_hunger", hunger < 24),
+        ("low_mood", mood < 28),
+        ("low_focus", focus < 18),
+        ("high_focus", focus > 84 and energy > 35),
+        ("high_energy", energy > 88 and mood > 45),
+        ("high_mood", mood > 88 and hunger > 40),
+        ("high_hunger", hunger > 90 and mood > 35),
+        ("all_good", hunger > 72 and mood > 72 and energy > 72 and focus > 55),
     ]
     today = _today_key()
     for key, active in checks:

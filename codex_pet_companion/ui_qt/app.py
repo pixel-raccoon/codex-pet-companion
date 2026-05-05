@@ -1279,19 +1279,22 @@ class CompanionController:
             return hint_line(pet_id, "recovery_mood")
         if bool(flags.get("focus", False)):
             return hint_line(pet_id, "recovery_focus")
+        record = self.today_record()
+        fed_today = int(record.get("feed", 0) or 0) > 0
+        rested_today = int(record.get("rest", 0) or 0) > 0
+
         if hunger < 30:
             return hint_line(pet_id, "low_hunger")
+        if not fed_today and hunger < 70:
+            return hint_line(pet_id, "not_fed_today")
         if energy < 30:
             return hint_line(pet_id, "low_energy")
+        if not rested_today and energy < 58:
+            return hint_line(pet_id, "no_rest_today")
         if mood < 35:
             return hint_line(pet_id, "low_mood")
         if focus < 25:
             return hint_line(pet_id, "low_focus")
-        record = self.today_record()
-        if int(record.get("feed", 0) or 0) <= 0:
-            return hint_line(pet_id, "not_fed_today")
-        if int(record.get("rest", 0) or 0) <= 0 and energy < 65:
-            return hint_line(pet_id, "no_rest_today")
         return hint_line(pet_id, "ok")
 
     def ensure_activity_state(self) -> None:

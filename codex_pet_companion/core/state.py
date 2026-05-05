@@ -135,7 +135,6 @@ def clear_runtime_logs(state: dict[str, Any]) -> None:
     state["codex_last_time"] = 0
     state["codex_silence_notified"] = False
     state["codex_counters"] = {"task_started": 0, "function_call": 0, "error": 0, "final_answer": 0, "events": 0}
-    state["last_update"] = now()
 
 def history_lines(state: dict[str, Any]) -> list[str]:
     history = state.get("history")
