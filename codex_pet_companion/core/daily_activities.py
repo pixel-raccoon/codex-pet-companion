@@ -81,7 +81,7 @@ def _micro_reaction_text(state: dict[str, Any], pet_id: str, current_time: float
 
 def _high_bond_text(state: dict[str, Any], pet_id: str, current_time: float) -> str:
     """Return an occasional warm high-bond fallback line."""
-    from .tamagotchi import days_together, friendship_rank  # local import to avoid circular at module level
+    from .virtual_pet import days_together, friendship_rank  # local import to avoid circular at module level
     if days_together(state) < 7 and friendship_rank(state) < 4:
         return ""
     options = get_high_bond_activities(pet_id)
@@ -93,7 +93,7 @@ def _high_bond_text(state: dict[str, Any], pet_id: str, current_time: float) -> 
 
 def _special_text(state: dict[str, Any], pet_id: str) -> str:
     """Return special-activity text if a milestone or holiday applies today, else ''."""
-    from .tamagotchi import days_together  # local import to avoid circular at module level
+    from .virtual_pet import days_together  # local import to avoid circular at module level
     bank = get_special_activities(pet_id)
     days = days_together(state)
     milestone_key = f"days_{days}"

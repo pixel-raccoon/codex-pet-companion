@@ -2,18 +2,33 @@ from __future__ import annotations
 
 import glob
 import json
+import os
 import re
+import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
 from typing import Any
+
+from codex_pet_companion.core.config import DEFAULT_SESSION_GLOB, detect_codex_home_candidates
+
+
+@dataclass(frozen=True)
+class SessionSource:
+    codex_home: Path
+    session_file: Path
+    mtime: float
+    size: int
 
 
 class CodexBridge(threading.Thread):
     def __init__(self, codex_home: Path | None, config: dict[str, Any], event_queue: Queue):
         super().__init__(daemon=True)
         self.codex_home = codex_home
+        self.codex_homes = self.detect_codex_homes(codex_home, config, include_slow=False)
+        self.active_codex_home: Path | None = None
         self.config = config
         self.event_queue = event_queue
         self.stop_event = threading.Event()
@@ -24,16 +39,18 @@ class CodexBridge(threading.Thread):
         self.last_activity_at = 0.0
         self.inactive_sent = False
         self.current_task_title = ""
+        self._last_debug_selection: tuple[str, str, int, str] | None = None
+        self._last_source_snapshot: tuple[str, str, int, str] | None = None
+        self._last_candidate_scan_at = 0.0
 
     def stop(self) -> None:
         self.stop_event.set()
 
     def run(self) -> None:
-        if self.codex_home is None:
-            return
         poll = max(0.5, float(self.config.get("pollSeconds", 1) or 1))
         while not self.stop_event.is_set():
             try:
+                self.refresh_codex_homes()
                 latest = self.find_latest_session()
                 if latest is not None:
                     self.process_file(latest)
@@ -46,16 +63,155 @@ class CodexBridge(threading.Thread):
         if bool(self.config.get("debugBridge", False)):
             self.event_queue.put({"action": "__bridge_debug__", "note": message, "session_file": self.active_session_file})
 
+    @staticmethod
+    def detect_codex_homes(codex_home: Path | None, config: dict[str, Any], include_slow: bool = True) -> list[Path]:
+        paths: list[Path] = []
+        for path in detect_codex_home_candidates(config, include_slow=include_slow):
+            key = path if path.is_absolute() else path.absolute()
+            if not any(existing == key for existing in paths):
+                paths.append(key)
+        if codex_home is not None and not any(existing == codex_home for existing in paths):
+            paths.insert(0, codex_home)
+        return paths
+
+    def refresh_codex_homes(self, force: bool = False) -> None:
+        current = time.time()
+        interval = max(5.0, float(self.config.get("bridgeCandidateRefreshSeconds", 30) or 30))
+        if not force and current - self._last_candidate_scan_at < interval:
+            return
+        self.codex_homes = self.detect_codex_homes(self.codex_home, self.config)
+        self._last_candidate_scan_at = current
+
     def find_latest_session(self) -> Path | None:
-        if self.codex_home is None:
-            return None
-        pattern = str(self.codex_home / str(self.config.get("sessionGlob", "sessions/*/*/*/rollout-*.jsonl")))
-        existing = [Path(p) for p in glob.glob(pattern) if Path(p).is_file()]
-        latest = max(existing, key=lambda p: p.stat().st_mtime) if existing else None
-        if latest is not None and str(latest) != self.active_session_file:
-            stat = latest.stat()
-            self.debug(f"session selected: {latest} mtime={stat.st_mtime:.3f} size={stat.st_size}")
+        session_glob = str(self.config.get("sessionGlob", DEFAULT_SESSION_GLOB) or DEFAULT_SESSION_GLOB)
+        sources: list[SessionSource] = []
+        patterns: list[str] = []
+        for codex_home in self.codex_homes:
+            pattern = str(codex_home / session_glob)
+            patterns.append(pattern)
+            try:
+                matches = glob.glob(pattern, recursive=True)
+            except OSError:
+                continue
+            for raw in matches:
+                path = Path(raw)
+                try:
+                    if not path.is_file():
+                        continue
+                    stat = path.stat()
+                except OSError:
+                    continue
+                sources.append(SessionSource(codex_home, path, stat.st_mtime, stat.st_size))
+
+        latest_source = max(sources, key=lambda source: source.mtime) if sources else None
+        nearby_count = self.nearby_session_count(sources)
+
+        if latest_source is not None:
+            latest = latest_source.session_file
+            self.active_codex_home = latest_source.codex_home
+            self.codex_home = latest_source.codex_home
+            latest_key = str(latest_source.session_file)
+            self.active_session_file = latest_key
+        else:
+            latest = None
+            self.active_codex_home = None
+            latest_key = ""
+            self.active_session_file = ""
+
+        self.emit_source_snapshot(nearby_count)
+
+        selection = (
+            str(self.active_codex_home or ""),
+            latest_key,
+            nearby_count,
+            "; ".join(patterns),
+        )
+        if selection != self._last_debug_selection:
+            self._last_debug_selection = selection
+            if latest_source is not None:
+                self.debug(
+                    f"codex candidates={len(self.codex_homes)} active={self.active_codex_home} "
+                    f"session={latest_source.session_file} nearby_sessions={nearby_count} "
+                    f"pattern={session_glob} mtime={latest_source.mtime:.3f} size={latest_source.size}"
+                )
+            else:
+                self.debug(f"codex candidates={len(self.codex_homes)} active=not found session=not found pattern={session_glob}")
         return latest
+
+    def nearby_session_count(self, sources: list[SessionSource]) -> int:
+        if not sources:
+            return 0
+        window = max(1.0, float(self.config.get("bridgeNearbySessionSeconds", 180) or 180))
+        cutoff = time.time() - window
+        return sum(1 for source in sources if source.mtime >= cutoff)
+
+    def source_snapshot(self, nearby_count: int) -> dict[str, Any]:
+        label, kind = self.source_label(self.active_codex_home)
+        found_labels = self.found_source_labels()
+        return {
+            "action": "__bridge_source__",
+            "codex_detection_status": "ready" if self.active_codex_home is not None else "not_found",
+            "codex_active_source_label": label,
+            "codex_active_session_file": self.active_session_file,
+            "codex_active_session_count": int(nearby_count),
+            "codex_active_source_kind": kind,
+            "codex_active_codex_home": str(self.active_codex_home or ""),
+            "codex_found_source_labels": found_labels,
+        }
+
+    def emit_source_snapshot(self, nearby_count: int) -> None:
+        snapshot = self.source_snapshot(nearby_count)
+        key = (
+            str(snapshot["codex_active_codex_home"]),
+            str(snapshot["codex_active_session_file"]),
+            int(snapshot["codex_active_session_count"]),
+            str(snapshot["codex_active_source_kind"]),
+            ", ".join(str(label) for label in snapshot.get("codex_found_source_labels", [])),
+        )
+        if key == self._last_source_snapshot:
+            return
+        self._last_source_snapshot = key
+        self.event_queue.put(snapshot)
+
+    @staticmethod
+    def source_label(path: Path | None) -> tuple[str, str]:
+        if path is None:
+            return ("not found", "none")
+        text = str(path)
+        normalized = text.replace("/", "\\")
+        lowered = normalized.lower()
+        for prefix in ("\\\\wsl.localhost\\", "\\\\wsl$\\"):
+            if lowered.startswith(prefix.lower()):
+                rest = normalized[len(prefix):].split("\\")
+                distro = rest[0] if rest and rest[0] else "WSL"
+                return (f"WSL {distro}", "wsl")
+        if sys.platform == "linux" and os.environ.get("WSL_DISTRO_NAME"):
+            try:
+                if path == Path.home() / ".codex":
+                    return (f"WSL {os.environ.get('WSL_DISTRO_NAME') or 'local'}", "wsl")
+            except Exception:
+                pass
+            if text.startswith("/mnt/c/Users/") or text.startswith("/mnt/c/users/"):
+                return ("Windows .codex", "windows")
+        try:
+            if sys.platform == "win32" and path == Path.home() / ".codex":
+                return ("Windows .codex", "windows")
+        except Exception:
+            pass
+        return (str(path), "custom")
+
+    def found_source_labels(self) -> list[str]:
+        labels: list[str] = []
+        for codex_home in self.codex_homes:
+            try:
+                if not codex_home.is_dir():
+                    continue
+            except OSError:
+                continue
+            label, _kind = self.source_label(codex_home)
+            if label != "not found" and label not in labels:
+                labels.append(label)
+        return labels
 
     def read_new_lines(self, path: Path) -> list[str]:
         key = str(path.resolve())
@@ -117,6 +273,7 @@ class CodexBridge(threading.Thread):
         self.last_activity_at = current
         self.inactive_sent = False
         self.debug(f"queue event: {action} type={kind or action} title={title} subtitle={subtitle}")
+        label, source_kind = self.source_label(self.active_codex_home)
         self.event_queue.put({
             "action": action,
             "note": note,
@@ -125,6 +282,11 @@ class CodexBridge(threading.Thread):
             "task_title": self.current_task_title,
             "notification_title": title,
             "notification_subtitle": subtitle,
+            "codex_active_source_label": label,
+            "codex_active_session_file": self.active_session_file,
+            "codex_active_source_kind": source_kind,
+            "codex_active_codex_home": str(self.active_codex_home or ""),
+            "codex_found_source_labels": self.found_source_labels(),
         })
 
     def notification_text(self, action: str, note: str, kind: str) -> tuple[str, str]:
@@ -148,7 +310,17 @@ class CodexBridge(threading.Thread):
         if ttl > 0 and time.time() - self.last_activity_at >= ttl:
             self.inactive_sent = True
             self.debug("queue event: codex_inactive")
-            self.event_queue.put({"action": "codex_inactive", "note": "", "session_file": self.active_session_file})
+            label, source_kind = self.source_label(self.active_codex_home)
+            self.event_queue.put({
+                "action": "codex_inactive",
+                "note": "",
+                "session_file": self.active_session_file,
+                "codex_active_source_label": label,
+                "codex_active_session_file": self.active_session_file,
+                "codex_active_source_kind": source_kind,
+                "codex_active_codex_home": str(self.active_codex_home or ""),
+                "codex_found_source_labels": self.found_source_labels(),
+            })
 
     def process_file(self, path: Path) -> None:
         max_age = float(self.config.get("bridgeMaxEventAgeSeconds", 900) or 900)
@@ -258,13 +430,14 @@ class CodexBridge(threading.Thread):
             return None
 
     def session_index_title(self, path: Path) -> str:
-        if self.codex_home is None:
+        codex_home = self.active_codex_home or self.codex_home
+        if codex_home is None:
             return ""
         match = re.search(r"([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$", path.stem, re.IGNORECASE)
         thread_id = match.group(1) if match else ""
         if not thread_id:
             return ""
-        index_path = self.codex_home / "session_index.jsonl"
+        index_path = codex_home / "session_index.jsonl"
         if not index_path.is_file():
             return ""
         try:

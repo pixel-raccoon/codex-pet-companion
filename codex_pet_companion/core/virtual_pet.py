@@ -788,7 +788,7 @@ def codex_short_line(state: dict[str, Any]) -> str:
         "error": "error",
         "waiting": "quiet",
     }
-    return f"Codex: {names.get(status, status)}"
+    return codex_line_with_source(state, names.get(status, status))
 
 def codex_status_line(state: dict[str, Any]) -> str:
     refresh_codex_status(state)
@@ -801,7 +801,22 @@ def codex_status_line(state: dict[str, Any]) -> str:
         "error": "error",
         "waiting": "quiet for a while",
     }
-    return f"Codex: {names.get(status, status)}"
+    return codex_line_with_source(state, names.get(status, status))
+
+def codex_line_with_source(state: dict[str, Any], status_text: str) -> str:
+    detection = str(state.get("codex_detection_status") or "").strip()
+    if detection == "checking":
+        return "Codex: looking for sessions..."
+    if detection == "error":
+        return "Codex: detection error"
+
+    source = str(state.get("codex_active_source_label") or "").strip()
+    if not source:
+        source = "not found" if not state.get("codex_session_file") else ""
+    if source == "not found":
+        return "Codex: not found"
+    parts = [source, status_text] if source else [status_text]
+    return "Codex: " + " · ".join(parts)
 
 def codex_session_lines(state: dict[str, Any]) -> list[str]:
     counters = state.get("codex_counters") if isinstance(state.get("codex_counters"), dict) else {}

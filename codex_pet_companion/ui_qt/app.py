@@ -29,7 +29,7 @@ from codex_pet_companion.core.pet_pack import export_pet_pack, import_pet_pack
 from codex_pet_companion.core.pets import PetInfo, discover_pets, pet_trait_key
 from codex_pet_companion.core.phrases import hint_line
 from codex_pet_companion.core.state import add_log, clear_runtime_logs, history_lines, load_state, now, save_state
-from codex_pet_companion.core.tamagotchi import (
+from codex_pet_companion.core.virtual_pet import (
     apply_action, care_state, codex_session_lines, codex_status_line,
     codex_short_line, decayed, days_together, ensure_bond_state, friendship_progress_line,
     friendship_rank, friendship_title, maybe_mark_codex_silence,
@@ -577,11 +577,14 @@ class CompactWindow(QObject):
 
     def update_view(self, pixmap, pet_name: str, notification: str, show_bubble: bool = False, subtitle: str = ""):
         self.sprite.update_pixmap(pixmap)
-        self.bubble.update_notification(notification, subtitle, show_bubble)
+        sprite_visible = self.sprite.isVisible()
+        self.bubble.update_notification(notification, subtitle, show_bubble and sprite_visible)
         self.follow_sprite()
-        if self.sprite.isVisible():
+        if sprite_visible:
             self.sprite.show()
-        if self.bubble.isVisible():
+        else:
+            self.bubble.hide()
+        if sprite_visible and self.bubble.isVisible():
             self.bubble.show()
             disable_windows_backdrop(self.bubble)
             self.bubble.raise_()
@@ -828,8 +831,8 @@ class FullWindow(QMainWindow):
         self.compact_size_combo.setMinimumWidth(170)
         grid.addWidget(self.compact_size_combo, 3, 1)
 
-        # Row 5: Codex folder: [path/info] [Choose]
-        grid.addWidget(QLabel("Codex folder:"), 4, 0)
+        # Row 5: Codex sources: [path/info] [Choose]
+        grid.addWidget(QLabel("Codex sources:"), 4, 0)
         self.path_info_codex = QLabel("not found")
         self.path_info_codex.setObjectName("Muted")
         self.path_info_codex.setWordWrap(True)
@@ -962,6 +965,13 @@ class CompanionController:
         self.state["codex_notification_title"] = ""
         self.state["codex_notification_subtitle"] = ""
         self.state["codex_notification_until"] = 0
+        self.state["codex_detection_status"] = "checking"
+        self.state["codex_active_source_label"] = ""
+        self.state["codex_active_session_file"] = ""
+        self.state["codex_active_session_count"] = 0
+        self.state["codex_active_source_kind"] = "none"
+        self.state["codex_active_codex_home"] = ""
+        self.state["codex_found_source_labels"] = []
         if self.config.get("clearLogsOnStart", True):
             clear_runtime_logs(self.state)
         else:
@@ -1074,7 +1084,7 @@ class CompanionController:
             self.compact_drag_animation = "running-right"
         elif dx < -1:
             self.compact_drag_animation = "running-left"
-        else:
+        elif self.compact_drag_animation not in STATES:
             self.compact_drag_animation = "running"
         self.force_animation(self.compact_drag_animation)
         self.advance_animation_frame()
@@ -1135,6 +1145,20 @@ class CompanionController:
             codex_log.insert(0, f"bridge: {message}")
             del codex_log[max_lines:]
 
+    def apply_bridge_source_metadata(self, event: dict[str, Any]) -> None:
+        keys = (
+            "codex_detection_status",
+            "codex_active_source_label",
+            "codex_active_session_file",
+            "codex_active_session_count",
+            "codex_active_source_kind",
+            "codex_active_codex_home",
+            "codex_found_source_labels",
+        )
+        for key in keys:
+            if key in event:
+                self.state[key] = event.get(key)
+
     def do_action(
         self,
         action: str,
@@ -1186,6 +1210,9 @@ class CompanionController:
             if action == "__bridge_debug__":
                 self.add_bridge_debug(str(event.get("note") or ""))
                 continue
+            if action == "__bridge_source__":
+                self.apply_bridge_source_metadata(event)
+                continue
             if action == "__update_check_result__":
                 self.handle_update_check_result(event)
                 continue
@@ -1196,6 +1223,7 @@ class CompanionController:
             self.add_bridge_debug(
                 f"queue received: {action} title={event.get('notification_title') or ''} subtitle={event.get('notification_subtitle') or ''}"
             )
+            self.apply_bridge_source_metadata(event)
             self.do_action(
                 action,
                 str(event.get("note") or ""),
@@ -1235,7 +1263,7 @@ class CompanionController:
         if float(self.state.get("event_until", 0) or 0) > now() and self.state.get("event_status"):
             return str(self.state["event_status"])
         name = self.pet_name()
-        if self.codex_home is None:
+        if self.codex_home is None and getattr(self.bridge, "active_codex_home", None) is None:
             return "Codex folder not found. Open settings."
         icon, label = care_state(self.state)
         if label == "Hungry":
@@ -1444,6 +1472,7 @@ class CompanionController:
             data.get("compact_notification_subtitle", ""),
         )
         self.full.update_view(full_pixmap, data)
+        self.full.path_info_codex.setText(self.codex_source_label())
         if self.tray is not None:
             self.tray.setToolTip(f"{data['pet_name']} — {data['codex']}")
 
@@ -1485,7 +1514,62 @@ class CompanionController:
         self.full.auto_update_check.setChecked(bool(self.config.get("checkUpdatesOnStartup", True)))
         self.set_combo_value(self.full.care_mode_combo, str(self.config.get("careMode") or "normal"))
 
-        self.full.path_info_codex.setText(str(self.codex_home or "not found"))
+        self.full.path_info_codex.setText(self.codex_source_label())
+
+    def codex_source_label(self) -> str:
+        active = getattr(self.bridge, "active_codex_home", None)
+        state_label = str(self.state.get("codex_active_source_label") or "").strip()
+        detection = str(self.state.get("codex_detection_status") or "").strip()
+        configured = str(self.config.get("codexHome") or "auto").strip()
+        custom = configured and configured.lower() != "auto"
+        active_label = state_label if state_label and state_label != "not found" else ""
+        found = self.state.get("codex_found_source_labels")
+        if not isinstance(found, list):
+            found = []
+        found_labels = [str(label).strip() for label in found if str(label).strip()]
+        if active is not None:
+            active_path = Path(active)
+            active_label = active_label or self.codex_source_name(active_path)
+        elif self.codex_home is not None and detection != "checking":
+            active_label = active_label or self.codex_source_name(self.codex_home)
+        if detection == "checking":
+            active_text = "looking for sessions..."
+            found_text = "checking"
+        else:
+            active_text = active_label or "not found"
+            if not found_labels and active_label:
+                found_labels = [active_label]
+            found_text = ", ".join(found_labels) if found_labels else "none"
+        if custom:
+            custom_text = configured
+        else:
+            custom_text = "not set"
+        return f"Active: {active_text}\nFound: {found_text}\nCustom: {custom_text}"
+
+    @staticmethod
+    def codex_source_name(path: Path) -> str:
+        text = str(path)
+        normalized = text.replace("/", "\\")
+        lowered = normalized.lower()
+        for prefix in ("\\\\wsl.localhost\\", "\\\\wsl$\\"):
+            if lowered.startswith(prefix.lower()):
+                rest = normalized[len(prefix):].split("\\")
+                distro = rest[0] if rest and rest[0] else "WSL"
+                return f"WSL {distro}"
+        if sys.platform == "linux" and os.environ.get("WSL_DISTRO_NAME"):
+            try:
+                if path == Path.home() / ".codex":
+                    return f"WSL {os.environ.get('WSL_DISTRO_NAME') or 'local'}"
+            except Exception:
+                pass
+            if text.startswith("/mnt/c/Users/") or text.startswith("/mnt/c/users/"):
+                return "Windows .codex"
+        try:
+            if sys.platform == "win32" and path.resolve() == (Path.home() / ".codex").resolve():
+                return "Windows .codex"
+        except Exception:
+            pass
+        return str(path)
 
     def apply_settings_from_ui(self):
         pet_id = self.full.pet_combo.currentData()
@@ -1578,6 +1662,13 @@ class CompanionController:
         self.state["codex_notification_title"] = ""
         self.state["codex_notification_subtitle"] = ""
         self.state["codex_notification_until"] = 0
+        self.state["codex_detection_status"] = "checking"
+        self.state["codex_active_source_label"] = ""
+        self.state["codex_active_session_file"] = ""
+        self.state["codex_active_session_count"] = 0
+        self.state["codex_active_source_kind"] = "none"
+        self.state["codex_active_codex_home"] = ""
+        self.state["codex_found_source_labels"] = []
         self.bridge.stop()
         self.bridge = CodexBridge(self.codex_home, self.config, self.queue)
         self.bridge.start()

@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +79,7 @@ CONFIG_PATH = data_dir() / "config.json"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "codexHome": "auto",
+    "codexAutoPathsEnabled": True,
     "stateDir": "auto",
     "miniAlwaysOnTop": True,
     "startMode": "full",
@@ -91,7 +94,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "clearLogsOnStart": True,
     "workPopups": False,
     "achievementPopups": False,
-    "sessionGlob": "sessions/*/*/*/rollout-*.jsonl",
+    "sessionGlob": "sessions/**/rollout-*.jsonl",
     "pollSeconds": 1,
     "longSilenceSeconds": 180,
     "codexRunningTtlSeconds": 90,
@@ -107,6 +110,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "bridgeInactiveSeconds": 45,
     "bridgeLiveEventAgeSeconds": 60,
     "bridgeMaxEventAgeSeconds": 900,
+    "bridgeNearbySessionSeconds": 180,
     "debugBridge": False,
     "debugBridgeMaxLines": 160,
     "selectedPetId": "lumisprout",
@@ -120,6 +124,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "lastUpdateCheck": 0,
     "ignoredUpdateVersion": "",
 }
+
+LEGACY_SESSION_GLOB = "sessions/*/*/*/rollout-*.jsonl"
+DEFAULT_SESSION_GLOB = "sessions/**/rollout-*.jsonl"
+_WSL_DISTRO_CACHE: tuple[float, list[str]] = (0.0, [])
 
 def deep_merge(default: dict, loaded: dict) -> dict:
     result = dict(default)
@@ -139,18 +147,24 @@ def load_config() -> dict[str, Any]:
     except Exception:
         loaded = {}
     config = deep_merge(DEFAULT_CONFIG, loaded)
+    changed = False
+    if str(config.get("sessionGlob") or "") == LEGACY_SESSION_GLOB:
+        config["sessionGlob"] = DEFAULT_SESSION_GLOB
+        changed = True
     # v11.3.1 removed tray startup. Old configs must not silently hide the app.
     if str(config.get("startMode") or "").lower() == "tray":
         config["startMode"] = "full"
-        save_config(config)
+        changed = True
     config["enableTray"] = bool(config.get("enableTray", False))
     # 1.0.6: full mode uses a smaller centered sprite presentation with stable padding.
     try:
         if float(config.get("fullScale", 1.00) or 1.00) >= 1.15:
             config["fullScale"] = 1.00
-            save_config(config)
+            changed = True
     except (TypeError, ValueError):
         config["fullScale"] = 1.00
+        changed = True
+    if changed:
         save_config(config)
     return config
 
@@ -162,10 +176,133 @@ def default_codex_home() -> Path:
     raw = os.environ.get("CODEX_HOME")
     return Path(raw).expanduser() if raw else Path.home() / ".codex"
 
-def resolve_codex_home(config: dict[str, Any]) -> Path | None:
+def _append_unique(paths: list[Path], path: Path | None) -> None:
+    if path is None:
+        return
+    expanded = path.expanduser()
+    key = str(expanded if expanded.is_absolute() else expanded.absolute())
+    if not any(str(existing) == key for existing in paths):
+        paths.append(Path(key))
+
+def _iter_wsl_codex_homes() -> list[Path]:
+    homes: list[Path] = []
+    distro_names = _wsl_distro_names()
+    for root in (Path(r"\\wsl.localhost"), Path(r"\\wsl$")):
+        try:
+            distros = [item.name for item in root.iterdir() if item.is_dir()]
+        except OSError:
+            distros = []
+        for distro_name in [*distros, *distro_names]:
+            if not distro_name:
+                continue
+            home_root = root / distro_name / "home"
+            try:
+                if not home_root.is_dir():
+                    continue
+                users = [item for item in home_root.iterdir() if item.is_dir()]
+            except OSError:
+                continue
+            for user_dir in users:
+                codex_home = user_dir / ".codex"
+                try:
+                    if codex_home.is_dir():
+                        homes.append(codex_home)
+                except OSError:
+                    continue
+    return homes
+
+def _wsl_distro_names() -> list[str]:
+    global _WSL_DISTRO_CACHE
+    current = time.time()
+    cached_at, cached_names = _WSL_DISTRO_CACHE
+    if current - cached_at < 300:
+        return list(cached_names)
+
+    names: list[str] = []
+    if sys.platform == "win32":
+        try:
+            startupinfo = None
+            creationflags = 0
+            if hasattr(subprocess, "STARTUPINFO"):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = 0
+            if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                creationflags = subprocess.CREATE_NO_WINDOW
+            result = subprocess.run(
+                ["wsl.exe", "-l", "-q"],
+                capture_output=True,
+                timeout=1.5,
+                check=False,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+            )
+            output = (result.stdout or b"").decode("utf-16le", errors="ignore")
+            if not output.strip():
+                output = (result.stdout or b"").decode("utf-8", errors="ignore")
+            for line in output.replace("\x00", "").splitlines():
+                name = line.strip()
+                if name:
+                    names.append(name)
+        except Exception:
+            pass
+    for name in ("Ubuntu", "Ubuntu-24.04", "Ubuntu-22.04", "Debian"):
+        names.append(name)
+    unique: list[str] = []
+    for name in names:
+        if name not in unique:
+            unique.append(name)
+    _WSL_DISTRO_CACHE = (current, unique)
+    return unique
+
+def _iter_windows_codex_homes_from_wsl() -> list[Path]:
+    homes: list[Path] = []
+    if sys.platform != "linux" or not os.environ.get("WSL_DISTRO_NAME"):
+        return homes
+    users_root = Path("/mnt/c/Users")
+    try:
+        users = [item for item in users_root.iterdir() if item.is_dir()]
+    except OSError:
+        return homes
+    for user_dir in users:
+        codex_home = user_dir / ".codex"
+        try:
+            if codex_home.is_dir():
+                homes.append(codex_home)
+        except OSError:
+            continue
+    return homes
+
+def detect_codex_home_candidates(config: dict[str, Any], include_slow: bool = True) -> list[Path]:
+    paths: list[Path] = []
     raw = str(config.get("codexHome") or "auto").strip()
-    path = default_codex_home() if raw.lower() == "auto" else Path(raw).expanduser()
-    return path.resolve() if path.exists() and path.is_dir() else None
+    if raw and raw.lower() != "auto":
+        _append_unique(paths, Path(raw).expanduser())
+
+    env_home = os.environ.get("CODEX_HOME")
+    if env_home:
+        _append_unique(paths, Path(env_home).expanduser())
+
+    try:
+        _append_unique(paths, Path.home() / ".codex")
+    except Exception:
+        pass
+
+    if include_slow and bool(config.get("codexAutoPathsEnabled", True)):
+        for codex_home in _iter_wsl_codex_homes():
+            _append_unique(paths, codex_home)
+        for codex_home in _iter_windows_codex_homes_from_wsl():
+            _append_unique(paths, codex_home)
+    return paths
+
+def resolve_codex_home(config: dict[str, Any], include_slow: bool = False) -> Path | None:
+    for path in detect_codex_home_candidates(config, include_slow=include_slow):
+        try:
+            if path.exists() and path.is_dir():
+                return path.resolve()
+        except OSError:
+            continue
+    return None
 
 def resolve_state_dir(config: dict[str, Any], codex_home: Path | None) -> Path:
     raw = str(config.get("stateDir") or "auto").strip()

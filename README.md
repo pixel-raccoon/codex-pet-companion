@@ -1,6 +1,6 @@
 # Codex Pet Companion
 
-A tiny tamagotchi-style desktop pet for Codex — made to sit beside your workflow, react to what Codex is doing, and slowly turn into a small companion with its own routine.
+A tiny desktop pet for Codex — made to sit beside your workflow, react to what Codex is doing, and slowly turn into a small companion with its own routine.
 
 It notices tasks, tool calls, reviews, errors, quiet stretches, and care actions. It can live in a full desktop window or shrink into a compact mini pet when you want your workspace back.
 
@@ -31,7 +31,7 @@ The app includes an updater, so future versions can be installed from inside the
 - Full desktop window and compact mini mode.
 - Mini mode with short workflow notifications, similar to the official Codex pets.
 - Reactions to Codex tasks, tool calls, reviews, errors, and quiet periods.
-- Tamagotchi-style care: feed, play, rest, and click the pet in full mode.
+- Virtual-pet care: feed, play, rest, and click the pet in full mode.
 - Fullness, mood, energy, focus, friendship, and days-together progression.
 - Daily activities, idle discoveries, micro reactions, and high-bond moments.
 - Two built-in pets:
@@ -39,6 +39,7 @@ The app includes an updater, so future versions can be installed from inside the
   - Vikamon — a mischievous chibi mascot in a green monster hoodie.
 - Custom pet packs, so you can import pets made by other people or share your own.
 - Built-in updater through GitHub Releases.
+- Automatic Codex source detection for Windows, WSL, and custom `.codex` folders.
 
 ## How Codex affects the pet
 
@@ -53,7 +54,7 @@ The idea is simple: your coding workflow becomes part of the pet's day.
 1. Download the latest release zip.
 2. Extract the `Codex Pet Companion` folder.
 3. Run `CodexPetCompanion.exe`.
-4. Open Settings and check that the Codex folder path is correct.
+4. Open Settings if you want to check or change the detected Codex folder.
 5. Choose a pet.
 6. Use mini mode when you want the pet to stay out of the way.
 7. Double-click the mini pet to return to the full window.
@@ -94,7 +95,6 @@ Windows releases are distributed as a folder:
 Codex Pet Companion/
   CodexPetCompanion.exe
   updater.exe
-  data/
 ```
 
 Your config, state, progress, and custom pets are stored in:
