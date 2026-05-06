@@ -106,6 +106,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "offlineDecayCapSeconds": 28800,
     "bridgeStartFresh": True,
     "bridgeInitialTailBytes": 65536,
+    "bridgeIgnoreExistingSessionTail": True,
+    "bridgeSuppressUntitledCommandErrors": True,
     "bridgeFreshFileSlackSeconds": 3,
     "bridgeInactiveSeconds": 45,
     "bridgeLiveEventAgeSeconds": 60,
@@ -187,6 +189,8 @@ def _append_unique(paths: list[Path], path: Path | None) -> None:
 def _iter_wsl_codex_homes() -> list[Path]:
     homes: list[Path] = []
     distro_names = _wsl_distro_names()
+    if sys.platform == "win32" and not distro_names:
+        return homes
     for root in (Path(r"\\wsl.localhost"), Path(r"\\wsl$")):
         try:
             distros = [item.name for item in root.iterdir() if item.is_dir()]
@@ -211,6 +215,45 @@ def _iter_wsl_codex_homes() -> list[Path]:
                     continue
     return homes
 
+def _windows_wsl_distro_names_from_registry() -> list[str]:
+    if sys.platform != "win32":
+        return []
+    try:
+        import winreg
+    except Exception:
+        return []
+
+    names: list[str] = []
+    try:
+        root = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Lxss",
+        )
+    except OSError:
+        return []
+
+    try:
+        index = 0
+        while True:
+            try:
+                subkey_name = winreg.EnumKey(root, index)
+                index += 1
+            except OSError:
+                break
+            try:
+                with winreg.OpenKey(root, subkey_name) as subkey:
+                    name, _kind = winreg.QueryValueEx(subkey, "DistributionName")
+            except OSError:
+                continue
+            if isinstance(name, str) and name.strip():
+                names.append(name.strip())
+    finally:
+        try:
+            winreg.CloseKey(root)
+        except Exception:
+            pass
+    return names
+
 def _wsl_distro_names() -> list[str]:
     global _WSL_DISTRO_CACHE
     current = time.time()
@@ -219,6 +262,15 @@ def _wsl_distro_names() -> list[str]:
         return list(cached_names)
 
     names: list[str] = []
+    registry_names = _windows_wsl_distro_names_from_registry()
+    names.extend(registry_names)
+
+    # On Windows without registered WSL distributions, calling wsl.exe can open the
+    # system "install WSL" prompt. Treat WSL as optional and skip it completely.
+    if sys.platform == "win32" and not registry_names:
+        _WSL_DISTRO_CACHE = (current, [])
+        return []
+
     if sys.platform == "win32":
         try:
             startupinfo = None
@@ -246,8 +298,10 @@ def _wsl_distro_names() -> list[str]:
                     names.append(name)
         except Exception:
             pass
-    for name in ("Ubuntu", "Ubuntu-24.04", "Ubuntu-22.04", "Debian"):
-        names.append(name)
+    elif sys.platform == "linux" and os.environ.get("WSL_DISTRO_NAME"):
+        current_distro = os.environ.get("WSL_DISTRO_NAME") or "local"
+        names.append(current_distro)
+
     unique: list[str] = []
     for name in names:
         if name not in unique:

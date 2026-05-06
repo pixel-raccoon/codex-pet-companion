@@ -58,6 +58,9 @@ DEFAULT_STATE: dict[str, Any] = {
     "daily_activity": {},
     "idle_activity": {},
     "idle_activity_next_at": 0,
+    "phrase_recent": {},
+    "last_hint_key": "",
+    "last_hint_text": "",
 }
 
 def load_state(path: Path) -> dict[str, Any]:
@@ -89,6 +92,8 @@ def load_state(path: Path) -> dict[str, Any]:
         state["daily_activity"] = {}
     if not isinstance(state.get("idle_activity"), dict):
         state["idle_activity"] = {}
+    if not isinstance(state.get("phrase_recent"), dict):
+        state["phrase_recent"] = {}
     if not isinstance(state.get("bond_milestones"), list):
         state["bond_milestones"] = []
     try:

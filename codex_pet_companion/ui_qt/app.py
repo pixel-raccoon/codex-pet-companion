@@ -11,8 +11,8 @@ from pathlib import Path
 from queue import Queue, Empty
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer, QPoint, QObject, QEvent, QUrl
-from PySide6.QtGui import QAction, QColor, QCursor, QFont, QPainter, QPaintEvent, QPixmap, QRegion, QTextCursor, QDesktopServices
+from PySide6.QtCore import Qt, QTimer, QPoint, QObject, QEvent, QUrl, QRect, QSize
+from PySide6.QtGui import QAction, QColor, QCursor, QFont, QPainter, QPaintEvent, QPainterPath, QPen, QPixmap, QRegion, QTextCursor, QDesktopServices
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
@@ -44,12 +44,19 @@ MINI_BUBBLE_THEME = "light"
 
 STYLE = """
 QWidget {
-    background: #0f1116;
     color: #edf5ef;
     font-family: Segoe UI, Arial;
     font-size: 13px;
 }
+QMainWindow,
+QWidget#AppRoot {
+    background: #0f1116;
+}
 QWidget#CompactWindow {
+    background: transparent;
+}
+QLabel,
+QCheckBox {
     background: transparent;
 }
 QLabel#PetSprite {
@@ -103,6 +110,7 @@ QLabel#Codex {
 QLabel#StatusLine,
 QLabel#CodexLine,
 QLabel#StateLine {
+    background: transparent;
     padding-left: 6px;
     padding-right: 6px;
 }
@@ -116,27 +124,30 @@ QLabel#CodexLine {
 QLabel#StateLine {
     color: #a9b5ad;
 }
+QFrame#SoftDivider {
+    background: #28313a;
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+}
 QLabel#MiniName {
     color: #a7f2c3;
     font-weight: 700;
 }
 QLabel#MiniBar {
-    background: rgba(11, 14, 20, 210);
-    border: 1px solid #1f2930;
-    border-radius: 10px;
+    background: transparent;
+    border: none;
     padding: 7px 10px;
 }
 QLabel#MiniBarCodex {
-    background: rgba(11, 14, 20, 210);
-    border: 1px solid #1f2930;
-    border-radius: 10px;
+    background: transparent;
+    border: none;
     padding: 7px 10px;
     color: #f1d56e;
 }
 QLabel#MiniBarState {
-    background: rgba(11, 14, 20, 210);
-    border: 1px solid #1f2930;
-    border-radius: 10px;
+    background: transparent;
+    border: none;
     padding: 7px 10px;
     color: #dce8e1;
 }
@@ -185,10 +196,16 @@ QProgressBar::chunk {
     border-radius: 5px;
 }
 QTextEdit {
-    background: #10141a;
+    background: rgba(16, 20, 26, 180);
     border: 1px solid #28313a;
     border-radius: 12px;
     padding: 8px;
+}
+QTextEdit#PlainTextPanel {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
 }
 QComboBox, QLineEdit {
     background: #161a20;
@@ -196,22 +213,57 @@ QComboBox, QLineEdit {
     border-radius: 8px;
     padding: 7px;
 }
-QTabWidget::pane {
+QComboBox {
+    padding-right: 28px;
+}
+QComboBox::drop-down {
+    background: transparent;
+    border: none;
+    width: 28px;
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+}
+QComboBox::down-arrow {
+    image: url(__COMBO_ARROW__);
+    width: 12px;
+    height: 12px;
+    margin-right: 9px;
+}
+QComboBox QAbstractItemView {
+    background: #161a20;
+    color: #edf5ef;
     border: 1px solid #28313a;
-    border-radius: 12px;
+    selection-background-color: #28313a;
+    selection-color: #edf5ef;
+    outline: 0;
+}
+QTabWidget::pane {
+    background: transparent;
+    border: none;
+    top: 8px;
+}
+QTabWidget::tab-bar {
+    alignment: left;
 }
 QTabBar::tab {
-    background: #161a20;
+    background: transparent;
     color: #a9b5ad;
-    padding: 7px 12px;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
+    border: none;
+    border-radius: 9px;
+    padding: 7px 14px;
+    margin-right: 6px;
+    min-width: 104px;
 }
 QTabBar::tab:selected {
     color: #edf5ef;
-    background: #28313a;
+    background: rgba(40, 49, 58, 190);
+}
+QTabBar::tab:hover:!selected {
+    color: #edf5ef;
+    background: rgba(40, 49, 58, 105);
 }
 QGroupBox {
+    background: transparent;
     border: 1px solid #28313a;
     border-radius: 12px;
     margin-top: 10px;
@@ -219,11 +271,13 @@ QGroupBox {
     font-weight: 700;
 }
 QGroupBox::title {
+    background: transparent;
     subcontrol-origin: margin;
     left: 12px;
     padding: 0 4px;
 }
 QCheckBox {
+    background: transparent;
     padding: 4px;
 }
 
@@ -242,6 +296,14 @@ QPushButton#AccentButton:hover {
 QPushButton#Secondary:hover {
     background: #1c2831;
     border: 1px solid #40525d;
+}
+QPushButton#PngActionButton,
+QPushButton#PngActionButton:hover,
+QPushButton#PngActionButton:pressed,
+QPushButton#PngActionButton:disabled {
+    background: transparent;
+    border: none;
+    padding: 0;
 }
 """
 
@@ -282,10 +344,13 @@ class InfoCard(QFrame):
 
         self.title_label = QLabel(title)
         self.title_label.setObjectName("CardTitle")
+        self.title_label.setFixedHeight(18)
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
         self.value_label = QLabel(value)
         self.value_label.setObjectName("CardValue")
         self.value_label.setWordWrap(True)
+        self.value_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
         layout.addWidget(self.title_label)
         layout.addWidget(self.value_label)
@@ -298,15 +363,16 @@ class InfoCard(QFrame):
 class TextPanel(QFrame):
     def __init__(self, title: str):
         super().__init__()
-        self.setObjectName("InfoCard")
+        self.setObjectName("PlainSection")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(8)
 
         title_label = QLabel(title)
         title_label.setObjectName("CardTitle")
 
         self.text = QTextEdit()
+        self.text.setObjectName("PlainTextPanel")
         self.text.setReadOnly(True)
 
         layout.addWidget(title_label)
@@ -314,6 +380,151 @@ class TextPanel(QFrame):
 
 
 
+
+
+class PetBackdropFrame(QFrame):
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("SpriteCard")
+        self._background = QPixmap()
+        self._background_path = ""
+        self._radius = 18
+
+    def set_background_path(self, path: str) -> None:
+        path = str(path or "")
+        if path == self._background_path:
+            return
+        self._background_path = path
+        self._background = QPixmap(path) if path else QPixmap()
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        rect = self.rect().adjusted(0, 0, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(rect, self._radius, self._radius)
+
+        painter.setClipPath(path)
+        painter.fillRect(rect, QColor(12, 16, 22, 110))
+
+        if not self._background.isNull():
+            overfill = 1.10
+            target_w = max(1, int(rect.width() * overfill))
+            target_h = max(1, int(rect.height() * overfill))
+            scaled = self._background.scaled(
+                target_w,
+                target_h,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            x = rect.center().x() - scaled.width() // 2
+            y = rect.center().y() - scaled.height() // 2
+            painter.drawPixmap(x, y, scaled)
+            painter.fillRect(rect, QColor(2, 6, 7, 46))
+
+        painter.setClipping(False)
+        painter.setPen(QPen(QColor("#202a33"), 1))
+        painter.drawRoundedRect(rect, self._radius, self._radius)
+
+
+class PngActionButton(QPushButton):
+    TARGET_HEIGHT = 42
+
+    def __init__(self, label: str, icon_path: Path):
+        super().__init__("")
+        self._label = label
+        self._pixmap = QPixmap(str(icon_path))
+        self._pressed = False
+        self.setToolTip(label)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFlat(True)
+        self.setText("")
+        self.setObjectName("PngActionButton")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(self.TARGET_HEIGHT)
+        self.setMinimumWidth(88)
+
+    def sizeHint(self) -> QSize:
+        if self._pixmap.isNull():
+            return QSize(96, self.TARGET_HEIGHT)
+        width = round(self.TARGET_HEIGHT * self._pixmap.width() / max(1, self._pixmap.height()))
+        return QSize(max(88, width), self.TARGET_HEIGHT)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(88, self.TARGET_HEIGHT)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._pressed = True
+            self.update()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._pressed = False
+        self.update()
+        super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._pressed = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        if self._pixmap.isNull():
+            return
+
+        y_offset = 1 if self._pressed and self.isEnabled() else 0
+        available = self.rect().adjusted(0, 0, 0, -1)
+        scaled = self._pixmap.scaled(
+            available.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        x = available.center().x() - scaled.width() // 2
+        y = available.center().y() - scaled.height() // 2 + y_offset
+        target = QRect(x, y, scaled.width(), scaled.height())
+
+        painter.setOpacity(0.50 if not self.isEnabled() else 1.0)
+        painter.drawPixmap(target, scaled)
+
+        if not self.isEnabled():
+            return
+
+        if self._pressed:
+            painter.setOpacity(0.16)
+            painter.fillRect(target, QColor(0, 0, 0))
+        elif self.underMouse():
+            painter.setOpacity(0.12)
+            painter.fillRect(target, QColor(255, 255, 255))
+
+
+def app_icon_path(name: str) -> Path:
+    filename = name if Path(name).suffix else f"{name}.png"
+    return Path(__file__).resolve().parents[2] / "icons" / filename
+
+
+def icon_for(name: str) -> QIcon:
+    return QIcon(str(app_icon_path(name)))
+
+
+def add_button_icon(button: QPushButton, icon_name: str, minimum_width: int | None = None) -> None:
+    button.setIcon(icon_for(icon_name))
+    button.setIconSize(QSize(20, 20))
+    if minimum_width is not None:
+        button.setMinimumWidth(minimum_width)
+
+
+def soft_divider() -> QFrame:
+    line = QFrame()
+    line.setObjectName("SoftDivider")
+    line.setFrameShape(QFrame.Shape.NoFrame)
+    return line
 
 
 def compact_scale_value(raw_value) -> float:
@@ -610,10 +821,11 @@ class FullWindow(QMainWindow):
         super().__init__()
         self.controller = controller
         self.setWindowTitle("Codex Pet Companion")
-        self.resize(900, 852)
-        self.setMinimumSize(780, 772)
+        self.resize(900, 900)
+        self.setMinimumSize(780, 820)
 
         root = QWidget()
+        root.setObjectName("AppRoot")
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -653,8 +865,8 @@ class FullWindow(QMainWindow):
         self.relationship.setWordWrap(False)
         pet_column.addWidget(self.relationship)
 
-        sprite_card = QFrame()
-        sprite_card.setObjectName("SpriteCard")
+        self.sprite_card = PetBackdropFrame()
+        sprite_card = self.sprite_card
         sprite_layout = QVBoxLayout(sprite_card)
         sprite_layout.setContentsMargins(16, 12, 16, 14)
         sprite_layout.setSpacing(0)
@@ -670,8 +882,9 @@ class FullWindow(QMainWindow):
 
         pet_buttons = QHBoxLayout()
         pet_buttons.setSpacing(8)
+        icons_dir = Path(__file__).resolve().parents[2] / "icons"
         for label, action in [("Feed", "feed"), ("Play", "play"), ("Rest", "rest")]:
-            button = QPushButton(label)
+            button = PngActionButton(label, icons_dir / f"{action}.png")
             button.clicked.connect(lambda _=False, a=action: self.controller.do_action(a))
             pet_buttons.addWidget(button)
         pet_column.addWidget(sprite_card)
@@ -682,7 +895,7 @@ class FullWindow(QMainWindow):
         side_card.setObjectName("Card")
         side = QVBoxLayout(side_card)
         side.setContentsMargins(14, 14, 14, 14)
-        side.setSpacing(8)
+        side.setSpacing(7)
 
         self.status = QLabel("")
         self.status.setWordWrap(True)
@@ -694,20 +907,29 @@ class FullWindow(QMainWindow):
 
         self.state = QLabel("")
         self.state.setObjectName("StateLine")
+        self.state.setWordWrap(True)
 
         side.addWidget(self.status)
+        side.addSpacing(2)
         side.addWidget(self.codex)
+        side.addSpacing(2)
         side.addWidget(self.state)
+        side.addSpacing(3)
+        side.addWidget(soft_divider())
+        side.addSpacing(3)
 
         self.stats = {
-            "hunger": StatRow("Fullness"),
-            "mood": StatRow("Mood"),
-            "energy": StatRow("Energy"),
-            "focus": StatRow("Focus"),
+            "hunger": StatRow("Fullness", app_icon_path("fullness")),
+            "mood": StatRow("Mood", app_icon_path("mood")),
+            "energy": StatRow("Energy", app_icon_path("energy")),
+            "focus": StatRow("Focus", app_icon_path("focus")),
         }
         for row in self.stats.values():
             side.addWidget(row)
 
+        side.addSpacing(3)
+        side.addWidget(soft_divider())
+        side.addSpacing(3)
         self.activity_card = InfoCard("Today's activity")
         self.activity_card.setMinimumHeight(92)
         side.addWidget(self.activity_card)
@@ -717,6 +939,7 @@ class FullWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.setMinimumHeight(440)
+        self.tabs.setIconSize(QSize(20, 20))
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
@@ -730,10 +953,10 @@ class FullWindow(QMainWindow):
         self.settings = QWidget()
         self.build_settings()
 
-        self.tabs.addTab(self.log, "General")
-        self.tabs.addTab(self.pet_tab, "Pet")
-        self.tabs.addTab(self.codex_tab, "Codex")
-        self.tabs.addTab(self.settings, "Settings")
+        self.tabs.addTab(self.log, icon_for("general"), "General")
+        self.tabs.addTab(self.pet_tab, icon_for("pet"), "Pet")
+        self.tabs.addTab(self.codex_tab, icon_for("codex"), "Codex")
+        self.tabs.addTab(self.settings, icon_for("settings"), "Settings")
 
         layout.addWidget(self.tabs, 1)
 
@@ -748,8 +971,8 @@ class FullWindow(QMainWindow):
         self.today_care_card = InfoCard("Today")
         self.today_hint_card = InfoCard("Hint")
 
-        top_cards.addWidget(self.today_care_card, 3)
-        top_cards.addWidget(self.today_hint_card, 2)
+        top_cards.addWidget(self.today_care_card, 2)
+        top_cards.addWidget(self.today_hint_card, 3)
         layout.addLayout(top_cards)
 
         self.pet_history_panel = TextPanel("Pet history")
@@ -764,6 +987,7 @@ class FullWindow(QMainWindow):
         layout.addWidget(self.codex_error_card)
 
         self.codex_history_panel = TextPanel("Codex events")
+        self.codex_history_panel.text.setPlaceholderText("No Codex events yet.")
         layout.addWidget(self.codex_history_panel, 1)
 
     def closeEvent(self, event):
@@ -840,7 +1064,7 @@ class FullWindow(QMainWindow):
 
         choose_codex = QPushButton("Choose")
         choose_codex.setObjectName("Secondary")
-        choose_codex.setFixedWidth(86)
+        choose_codex.setFixedWidth(112)
         choose_codex.clicked.connect(self.controller.choose_codex_home)
         grid.addWidget(choose_codex, 4, 4, Qt.AlignmentFlag.AlignRight)
 
@@ -850,14 +1074,17 @@ class FullWindow(QMainWindow):
         buttons_row.setSpacing(6)
 
         apply = QPushButton("Apply settings")
+        apply.setMinimumWidth(154)
         apply.clicked.connect(self.controller.apply_settings_from_ui)
 
         reset_ui = QPushButton("Reset UI")
         reset_ui.setObjectName("Secondary")
+        reset_ui.setMinimumWidth(124)
         reset_ui.clicked.connect(self.controller.reset_ui_settings)
 
         reset_state = QPushButton("Reset state")
         reset_state.setObjectName("Danger")
+        reset_state.setMinimumWidth(132)
         reset_state.clicked.connect(self.controller.reset_state)
 
         buttons_row.addWidget(apply, 2)
@@ -869,10 +1096,13 @@ class FullWindow(QMainWindow):
         file_buttons.setSpacing(6)
         imp = QPushButton("Import / adopt pet")
         imp.setObjectName("AccentButton")
+        add_button_icon(imp, "pet", 178)
         exp = QPushButton("Export / share pet")
         exp.setObjectName("AccentButton")
+        add_button_icon(exp, "pet", 178)
         refresh = QPushButton("Refresh pets")
         refresh.setObjectName("Secondary")
+        refresh.setMinimumWidth(142)
         refresh.clicked.connect(self.controller.reload_pets)
 
         for button in [imp, exp, refresh]:
@@ -887,6 +1117,7 @@ class FullWindow(QMainWindow):
         updates_row.addWidget(QLabel("Updates:"))
         self.check_updates = QPushButton("Check now")
         self.check_updates.setObjectName("Secondary")
+        self.check_updates.setMinimumWidth(126)
         self.check_updates.clicked.connect(lambda: self.controller.check_updates(manual=True))
         self.auto_update_check = QCheckBox("Check automatically")
         updates_row.addWidget(self.check_updates)
@@ -928,6 +1159,7 @@ class FullWindow(QMainWindow):
         return str(text or "").replace("♡", "♡ ")
 
     def update_view(self, pixmap, data: dict[str, Any]):
+        self.sprite_card.set_background_path(str(data.get("pet_background_path") or ""))
         self.pet.setPixmap(pixmap)
         self.title.setText(data["pet_name"])
         self.status.setText(data["status"])
@@ -1292,38 +1524,46 @@ class CompanionController:
 
 
     def today_hint_text(self) -> str:
+        def stable_hint(key: str) -> str:
+            scoped_key = f"{self.current_pet.id}:{key}"
+            if self.state.get("last_hint_key") == scoped_key and self.state.get("last_hint_text"):
+                return str(self.state["last_hint_text"])
+            text = hint_line(self.current_pet.id, key, self.state)
+            self.state["last_hint_key"] = scoped_key
+            self.state["last_hint_text"] = text
+            return text
+
         hunger = float(self.state.get("hunger", 50) or 0)
         mood = float(self.state.get("mood", 50) or 0)
         energy = float(self.state.get("energy", 50) or 0)
         focus = float(self.state.get("focus", 50) or 0)
         flags = self.state.get("recovery_flags") if isinstance(self.state.get("recovery_flags"), dict) else {}
-        pet_id = self.current_pet.id
 
         if bool(flags.get("hunger", False)):
-            return hint_line(pet_id, "recovery_hunger")
+            return stable_hint("recovery_hunger")
         if bool(flags.get("energy", False)):
-            return hint_line(pet_id, "recovery_energy")
+            return stable_hint("recovery_energy")
         if bool(flags.get("mood", False)):
-            return hint_line(pet_id, "recovery_mood")
+            return stable_hint("recovery_mood")
         if bool(flags.get("focus", False)):
-            return hint_line(pet_id, "recovery_focus")
+            return stable_hint("recovery_focus")
         record = self.today_record()
         fed_today = int(record.get("feed", 0) or 0) > 0
         rested_today = int(record.get("rest", 0) or 0) > 0
 
         if hunger < 30:
-            return hint_line(pet_id, "low_hunger")
+            return stable_hint("low_hunger")
         if not fed_today and hunger < 70:
-            return hint_line(pet_id, "not_fed_today")
+            return stable_hint("not_fed_today")
         if energy < 30:
-            return hint_line(pet_id, "low_energy")
+            return stable_hint("low_energy")
         if not rested_today and energy < 58:
-            return hint_line(pet_id, "no_rest_today")
+            return stable_hint("no_rest_today")
         if mood < 35:
-            return hint_line(pet_id, "low_mood")
+            return stable_hint("low_mood")
         if focus < 25:
-            return hint_line(pet_id, "low_focus")
-        return hint_line(pet_id, "ok")
+            return stable_hint("low_focus")
+        return stable_hint("ok")
 
     def ensure_activity_state(self) -> None:
         _ensure_activity_state(self.state, self.current_pet.id, str(self.state.get("codex_status") or "idle"))
@@ -1401,6 +1641,7 @@ class CompanionController:
 
         return {
             "pet_name": self.pet_name(),
+            "pet_background_path": str(self.current_pet.background_path or ""),
             "status": self.status_text(),
             "codex": codex_status_line(self.state),
             "compact_notification": str(self.state.get("codex_notification_title") or self.state.get("codex_notification") or self.state.get("event_status") or ""),
@@ -1546,7 +1787,6 @@ class CompanionController:
             custom_text = "not set"
         return f"Active: {active_text}\nFound: {found_text}\nCustom: {custom_text}"
 
-    @staticmethod
     def codex_source_name(path: Path) -> str:
         text = str(path)
         normalized = text.replace("/", "\\")
@@ -1921,6 +2161,7 @@ class CompanionController:
 
 def run_app():
     app = QApplication(sys.argv)
+    app.setEffectEnabled(Qt.UIEffect.UI_AnimateCombo, False)
     font = app.font()
     if font.pointSize() <= 0:
         font.setPointSize(10)
@@ -1932,7 +2173,8 @@ def run_app():
         print("Codex Pet Companion is already running.")
         return
 
-    app.setStyleSheet(STYLE)
+    combo_arrow = str(app_icon_path("chevron-down.svg").resolve()).replace("\\", "/")
+    app.setStyleSheet(STYLE.replace("__COMBO_ARROW__", combo_arrow))
     app.aboutToQuit.connect(guard.release)
 
     controller = CompanionController(app)

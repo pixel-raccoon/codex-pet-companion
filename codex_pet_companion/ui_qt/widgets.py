@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QLabel, QProgressBar, QWidget, QHBoxLayout
 
 BAR_STYLE_BY_STATE = {
@@ -55,20 +58,56 @@ BAR_STYLE_BY_STATE = {
 }
 
 class StatRow(QWidget):
-    def __init__(self, label: str):
+    def __init__(self, label: str, icon_path: Path | None = None):
         super().__init__()
+        self.setObjectName("StatRow")
+        self.setStyleSheet(
+            """
+            QWidget#StatRow,
+            QWidget#StatRow QLabel {
+                background: transparent;
+                border: none;
+            }
+            QLabel#StatName {
+                color: #d8eee1;
+                font-weight: 700;
+            }
+            QLabel#StatValue {
+                color: #a9b5ad;
+                font-weight: 700;
+            }
+            """
+        )
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 2, 0, 2)
         layout.setSpacing(8)
+
+        self.icon = QLabel()
+        self.icon.setFixedSize(20, 20)
+        self.icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if icon_path is not None:
+            pixmap = QPixmap(str(icon_path))
+            if not pixmap.isNull():
+                self.icon.setPixmap(
+                    pixmap.scaled(
+                        self.icon.size(),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+
         self.name = QLabel(label)
-        self.name.setFixedWidth(86)
+        self.name.setObjectName("StatName")
+        self.name.setFixedWidth(64)
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
         self.bar.setTextVisible(False)
         self._bar_state = ""
         self.value = QLabel("0%")
+        self.value.setObjectName("StatValue")
         self.value.setFixedWidth(38)
         self.value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.icon)
         layout.addWidget(self.name)
         layout.addWidget(self.bar, 1)
         layout.addWidget(self.value)

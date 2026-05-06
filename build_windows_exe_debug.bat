@@ -21,8 +21,6 @@ pyinstaller ^
   --console ^
   --name CodexPetCompanion_Debug ^
   --icon "app_icon.ico" ^
-  --add-data "spritesheet.webp;." ^
-  --add-data "pet.json;." ^
   --add-data "builtin_pets;builtin_pets" ^
   --add-data "README.md;." ^
   codex_pet_companion\main.py

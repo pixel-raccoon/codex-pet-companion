@@ -263,7 +263,7 @@ def interrupt_rest(state: dict[str, Any], pet_name: str, pet_id: str) -> bool:
     if not is_resting(state):
         return False
     state["rest_until"] = 0.0
-    msg = care_line(pet_id, pet_name, "rest_interrupt")
+    msg = care_line(pet_id, pet_name, "rest_interrupt", state=state)
     add_log(state, msg)
     return True
 
@@ -408,7 +408,8 @@ def decayed(state: dict[str, Any], config: dict[str, Any], trait_key: str) -> di
     else:
         energy -= dt * (1.0 / 3600.0) * rate * mult * trait_mult(trait_key, "energy_decay_mult")
         if active_codex:
-            energy -= dt * (1.0 / 2200.0) * rate * trait_mult(trait_key, "energy_decay_mult")
+            # Codex activity should feel ambient, not drain the pet like active play.
+            energy -= dt * (1.0 / 6600.0) * rate * trait_mult(trait_key, "energy_decay_mult")
             focus += dt * (1.0 / 360.0) * rate
             inc_daily(state, "focused_seconds", dt)
         else:
@@ -474,7 +475,7 @@ def set_event(state: dict[str, Any], event: str, pet_name: str, pet_id: str, cus
         "codex_running": 2.4, "review_ready": 4.5, "error": 5.5, "note": 2.2,
         "feed": 2.0, "pet": 1.8, "play": 2.0, "rest": 2.8
     }.get(event, 2.0)
-    state["event_status"] = custom_status or phrase(event, pet_name, pet_id)
+    state["event_status"] = custom_status or phrase(event, pet_name, pet_id, state)
 
 def action_quality(state: dict[str, Any], action: str) -> tuple[float, str]:
     hunger = int(state.get("hunger", 50) or 50)
@@ -568,12 +569,12 @@ def apply_action(
     if action == "feed":
         left = cooldown_left(state, "feed")
         if left > 0:
-            deny_action(state, "feed", care_line(pet_id, pet_name, "feed_cooldown", minutes=minutes_text(left)))
+            deny_action(state, "feed", care_line(pet_id, pet_name, "feed_cooldown", minutes=minutes_text(left), state=state))
             update_recovery_state(state, config)
             return
         if float(state.get("hunger", 50) or 50) >= 85:
             set_cooldown(state, "feed", 5 * 60)
-            deny_action(state, "feed", care_line(pet_id, pet_name, "feed_full"))
+            deny_action(state, "feed", care_line(pet_id, pet_name, "feed_full", state=state))
             update_recovery_state(state, config)
             return
         interrupt_rest(state, pet_name, pet_id)
@@ -584,7 +585,7 @@ def apply_action(
         set_cooldown(state, "feed", 20 * 60)
         inc_daily(state, "feed")
         set_event(state, "feed", pet_name, pet_id)
-        msg = care_line(pet_id, pet_name, "feed_hungry" if before < 25 else "feed")
+        msg = care_line(pet_id, pet_name, "feed_hungry" if before < 25 else "feed", state=state)
         state["event_status"] = msg
         set_emotion(state, "happy", 55)
         if increment_counter(state, "feed") >= 5:
@@ -600,14 +601,14 @@ def apply_action(
     if action == "pet":
         left = cooldown_left(state, "pet")
         if left > 0:
-            deny_action(state, "pet", care_line(pet_id, pet_name, "pet_cooldown", minutes=minutes_text(left)))
+            deny_action(state, "pet", care_line(pet_id, pet_name, "pet_cooldown", minutes=minutes_text(left), state=state))
             update_recovery_state(state, config)
             return
         count = inc_daily(state, "pet")
         effect = 14 if count <= 3 else 5 if count <= 6 else 0
         if effect <= 0:
             set_cooldown(state, "pet", 4 * 60)
-            deny_action(state, "pet", care_line(pet_id, pet_name, "pet_spam"))
+            deny_action(state, "pet", care_line(pet_id, pet_name, "pet_spam", state=state))
             update_recovery_state(state, config)
             return
         interrupt_rest(state, pet_name, pet_id)
@@ -619,7 +620,7 @@ def apply_action(
         set_event(state, "pet", pet_name, pet_id)
         set_emotion(state, "happy", 45)
         add_bond(state, "pet", 0.9, pet_name, pet_id, daily_limit=3)
-        msg = care_line(pet_id, pet_name, "pet")
+        msg = care_line(pet_id, pet_name, "pet", state=state)
         state["event_status"] = msg
         add_log(state, msg)
         update_recovery_state(state, config)
@@ -629,11 +630,11 @@ def apply_action(
         resting_before_play = is_resting(state)
         left = cooldown_left(state, "play")
         if left > 0:
-            deny_action(state, "play", care_line(pet_id, pet_name, "play_cooldown", minutes=minutes_text(left)))
+            deny_action(state, "play", care_line(pet_id, pet_name, "play_cooldown", minutes=minutes_text(left), state=state))
             update_recovery_state(state, config)
             return
         if float(state.get("energy", 50) or 50) < 25:
-            deny_action(state, "play", care_line(pet_id, pet_name, "play_tired"))
+            deny_action(state, "play", care_line(pet_id, pet_name, "play_tired", state=state))
             update_recovery_state(state, config)
             return
         if resting_before_play:
@@ -649,7 +650,7 @@ def apply_action(
         if increment_counter(state, "play") >= 5:
             unlock(state, "play_5")
         add_bond(state, "play", 1.4, pet_name, pet_id, daily_limit=1)
-        msg = care_line(pet_id, pet_name, "play")
+        msg = care_line(pet_id, pet_name, "play", state=state)
         state["event_status"] = msg
         add_log(state, msg)
         update_recovery_state(state, config)
@@ -657,12 +658,12 @@ def apply_action(
 
     if action == "rest":
         if is_resting(state):
-            deny_action(state, "rest", care_line(pet_id, pet_name, "rest_already"))
+            deny_action(state, "rest", care_line(pet_id, pet_name, "rest_already", state=state))
             update_recovery_state(state, config)
             return
         left = cooldown_left(state, "rest")
         if left > 0:
-            deny_action(state, "rest", care_line(pet_id, pet_name, "rest_cooldown", minutes=minutes_text(left)))
+            deny_action(state, "rest", care_line(pet_id, pet_name, "rest_cooldown", minutes=minutes_text(left), state=state))
             update_recovery_state(state, config)
             return
         energy_before = float(state.get("energy", 50) or 50)
@@ -677,7 +678,7 @@ def apply_action(
         set_event(state, "rest", pet_name, pet_id)
         set_emotion(state, "neutral", 10)
         add_bond(state, "rest", 1.5 if low_energy else 0.7, pet_name, pet_id, daily_limit=1)
-        msg = care_line(pet_id, pet_name, "rest")
+        msg = care_line(pet_id, pet_name, "rest", state=state)
         state["event_status"] = msg
         add_log(state, msg)
         update_recovery_state(state, config)
@@ -685,7 +686,7 @@ def apply_action(
 
     if action in {"note", "chat"}:
         interrupt_rest(state, pet_name, pet_id)
-        response = chat_response(note, pet_name, pet_id)
+        response = chat_response(note, pet_name, pet_id, state)
         set_event(state, "note", pet_name, pet_id, response)
         set_emotion(state, "curious", 35)
         state["focus"] = clamp_float(float(state.get("focus", 50) or 50) + 1)
@@ -700,7 +701,8 @@ def apply_action(
         was_resting = interrupt_rest(state, pet_name, pet_id)
         inc_daily(state, "codex_tools" if "tool" in note.lower() else "codex_tasks")
         state["focus"] = clamp_float(float(state.get("focus", 50) or 50) + (6 if float(state.get("energy", 50) or 50) > 30 else 2))
-        state["energy"] = clamp_float(float(state.get("energy", 50) or 50) - (1.0 if was_resting else 2.0))
+        # One Codex event should only nudge energy down. Most drain is handled by the ambient timer.
+        state["energy"] = clamp_float(float(state.get("energy", 50) or 50) - (0.35 if was_resting else 0.67))
         update_codex_status(state, "running", "function_call" if "tool" in note.lower() else "task_started", note or "Codex is working", session_file, config)
         state["busy_streak"] = int(state.get("busy_streak", 0) or 0) + 1
         if state["busy_streak"] >= 5:

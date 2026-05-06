@@ -42,6 +42,38 @@ class CodexBridge(threading.Thread):
         self._last_debug_selection: tuple[str, str, int, str] | None = None
         self._last_source_snapshot: tuple[str, str, int, str] | None = None
         self._last_candidate_scan_at = 0.0
+        self.seen_session_files: set[str] = set()
+
+    @classmethod
+    def task_title_from_user_message(cls, value: Any, limit: int = 40) -> str:
+        text = cls.long_text(value)
+        if not text:
+            return ""
+
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        request_match = re.search(
+            r"(?ims)^##\s*(?:my\s+)?request(?:\s+for\s+codex)?\s*:?\s*(.*)$",
+            normalized,
+        )
+        if request_match:
+            normalized = request_match.group(1).strip()
+        else:
+            context_match = re.search(
+                r"(?ims)^##\s*context\s+from\s+my\s+ide\s+setup\b",
+                normalized,
+            )
+            if context_match:
+                normalized = normalized[: context_match.start()].strip()
+
+        normalized = re.sub(
+            r"(?ims)^##\s*context\s+from\s+my\s+ide\s+setup\b.*?(?=^##\s*|\Z)",
+            "",
+            normalized,
+        ).strip()
+        normalized = re.sub(r"(?m)^##+\s*", "", normalized).strip()
+        if not normalized:
+            return ""
+        return cls.short_title(normalized, limit)
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -221,7 +253,11 @@ class CodexBridge(threading.Thread):
         if key not in self.offsets and bool(self.config.get("bridgeStartFresh", True)):
             fresh_slack = float(self.config.get("bridgeFreshFileSlackSeconds", 3) or 3)
             created_after_bridge = float(getattr(stat, "st_ctime", 0.0) or 0.0) >= self.started_at - fresh_slack
-            if not created_after_bridge:
+            ignore_existing_tail = bool(self.config.get("bridgeIgnoreExistingSessionTail", True))
+            if not created_after_bridge and ignore_existing_tail:
+                self.offsets[key] = size
+                self.debug(f"existing session ignored until new writes: offset={size} size={size} ctime={stat.st_ctime:.3f} mtime={stat.st_mtime:.3f}")
+            elif not created_after_bridge:
                 tail_bytes = max(0, int(self.config.get("bridgeInitialTailBytes", 65536) or 0))
                 self.offsets[key] = self.tail_start_offset(path, max(0, size - tail_bytes))
                 self.debug(f"existing session tail: offset={self.offsets[key]} size={size} ctime={stat.st_ctime:.3f} mtime={stat.st_mtime:.3f}")
@@ -355,7 +391,11 @@ class CodexBridge(threading.Thread):
         ptype = str(payload.get("type") or obj.get("type") or "")
 
         if ptype == "user_message":
-            title = self.short_title(payload.get("message") or payload.get("text") or payload.get("text_elements"))
+            raw_message = payload.get("message") or payload.get("text") or payload.get("text_elements")
+            title = self.task_title_from_user_message(raw_message)
+            if not title and self.is_ide_context_message(raw_message):
+                self.debug("skip IDE context user_message")
+                return None
             if title:
                 self.current_task_title = title
                 self.debug(f"task title: {title}")
@@ -375,7 +415,11 @@ class CodexBridge(threading.Thread):
         if ptype == "exec_command_end":
             status = str(payload.get("status") or "").lower()
             exit_code = payload.get("exit_code")
-            if status == "failed" or (isinstance(exit_code, int) and exit_code != 0):
+            failed = status == "failed" or (isinstance(exit_code, int) and exit_code != 0)
+            if failed and bool(self.config.get("bridgeSuppressUntitledCommandErrors", True)) and not self.current_task_title.strip():
+                self.debug(f"skip untitled command error: status={status or '?'} exit_code={exit_code}")
+                return None
+            if failed:
                 return ("error", f"Codex reported an error: status={status or '?'} exit_code={exit_code}", "error")
             return ("codex_running", "Codex finished a command", "exec_command_end")
         if ptype == "patch_apply_end":
@@ -448,7 +492,7 @@ class CodexBridge(threading.Thread):
                     except Exception:
                         continue
                     if str(item.get("id") or "") == thread_id:
-                        return self.short_title(item.get("thread_name") or "")
+                        return self.task_title_from_user_message(item.get("thread_name") or "")
         except Exception:
             return ""
         return ""
@@ -464,7 +508,7 @@ class CodexBridge(threading.Thread):
                 yield from cls.iter_dicts(item)
 
     @staticmethod
-    def short_text(value: Any) -> str:
+    def long_text(value: Any) -> str:
         if isinstance(value, list):
             parts = []
             for item in value:
@@ -474,8 +518,17 @@ class CodexBridge(threading.Thread):
                     text = item.get("text") or item.get("content")
                     if isinstance(text, str):
                         parts.append(text)
-            value = " ".join(parts)
-        text = " ".join(str(value or "").split())
+            value = "\n".join(parts)
+        return str(value or "").strip()
+
+    @classmethod
+    def is_ide_context_message(cls, value: Any) -> bool:
+        text = cls.long_text(value)
+        return bool(re.search(r"(?ims)^##\s*context\s+from\s+my\s+ide\s+setup\b", text))
+
+    @classmethod
+    def short_text(cls, value: Any) -> str:
+        text = " ".join(cls.long_text(value).split())
         if not text:
             return ""
         return text[:64].rstrip() + ("..." if len(text) > 64 else "")
