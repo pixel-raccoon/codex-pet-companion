@@ -21,6 +21,7 @@ pyinstaller ^
   --windowed ^
   --name CodexPetCompanion ^
   --icon "app_icon.ico" ^
+  --add-data "icons;icons" ^
   --add-data "builtin_pets;builtin_pets" ^
   --add-data "README.md;." ^
   codex_pet_companion\main.py
